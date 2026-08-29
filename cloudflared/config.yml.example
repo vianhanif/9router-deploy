@@ -1,0 +1,22 @@
+# Cloudflare Tunnel configuration for 9router Tencent deployment.
+#
+# Setup (Phase 2, manual):
+#   1. In Cloudflare Zero Trust dashboard, create a tunnel named `9router-tencent`.
+#   2. Download the credentials JSON and save it as /opt/9router/cloudflared/<tunnel-id>.json (mode 600).
+#   3. Replace BOTH <tunnel-id> placeholders below with the real tunnel ID.
+#   4. Add DNS CNAMEs:
+#      - 9router-dashboard.vianhanif.link -> <tunnel-id>.cfargotunnel.com
+#      - 9router-api.vianhanif.link       -> <tunnel-id>.cfargotunnel.com
+#
+# The credentials JSON must never be committed (see .gitignore: cloudflared/*.json).
+# `cloudflared tunnel run` reads the id from the `tunnel:` key — no id argument needed.
+
+tunnel: <tunnel-id>
+credentials-file: /etc/cloudflared/<tunnel-id>.json
+
+ingress:
+  - hostname: 9router-dashboard.vianhanif.link
+    service: http://caddy:80
+  - hostname: 9router-api.vianhanif.link
+    service: http://caddy:80
+  - service: http_status:404

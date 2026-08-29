@@ -1,0 +1,17 @@
+{$SITE_DASHBOARD} {
+    reverse_proxy 9router:20128 {
+        flush_interval -1
+    }
+    encode zstd gzip
+}
+
+{$SITE_API} {
+    reverse_proxy 9router-api:20127 {
+        flush_interval -1
+    }
+    encode zstd gzip
+}
+
+:80 {
+    respond "9router: missing site env" 500
+}

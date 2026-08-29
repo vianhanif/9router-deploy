@@ -1,0 +1,6 @@
+.env
+env/*.env
+cloudflared/*.json
+data/
+data-home/
+proxy/logs/
