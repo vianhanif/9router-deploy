@@ -72,9 +72,8 @@ services:
     image: cloudflare/cloudflared:latest
     container_name: cloudflared
     restart: unless-stopped
-    volumes:
-      - ./cloudflared:/etc/cloudflared:ro
-    command: tunnel --config /etc/cloudflared/config.yml run
+    env_file: ./env/cloudflared.env
+    command: tunnel --no-autoupdate run
     networks: [9router-net]
     depends_on:
       caddy: { condition: service_healthy }
