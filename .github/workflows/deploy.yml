@@ -18,7 +18,8 @@ jobs:
           key: ${{ secrets.TENCENT_SSH_KEY }}
           source: "docker-compose.yml,proxy/Caddyfile,src/9router/Dockerfile,src/9router-api/Dockerfile"
           target: /opt/9router
-      - name: Rebuild & restart
+      # Build does NOT touch the running stack. Tag current images :prev for rollback.
+      - name: Build new images (no impact on running stack)
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.TENCENT_HOST }}
@@ -27,6 +28,52 @@ jobs:
           script: |
             set -e
             cd /opt/9router
+            docker tag 9router-9router:latest 9router-9router:prev 2>/dev/null || true
+            docker tag 9router-9router-api:latest 9router-9router-api:prev 2>/dev/null || true
             docker compose build 9router 9router-api
+      # Run each new image standalone on a scratch port; abort before switching
+      # if either fails to serve /api/health.
+      - name: Smoke test new images (abort deploy if broken)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.TENCENT_HOST }}
+          username: ${{ secrets.TENCENT_USER }}
+          key: ${{ secrets.TENCENT_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/9router
+            cleanup() { docker rm -f smoke-9router smoke-9router-api >/dev/null 2>&1 || true; }
+            trap cleanup EXIT
+            # 9router dashboard
+            docker run -d --name smoke-9router -e PORT=20328 -e HOSTNAME=0.0.0.0 -e DATA_DIR=/tmp/smoke-data -p 20328:20328 9router-9router:latest
+            for i in $(seq 1 30); do curl -fsS http://127.0.0.1:20328/api/health >/dev/null 2>&1 && break; sleep 2; done
+            curl -fsS http://127.0.0.1:20328/api/health >/dev/null || { echo "9router smoke FAILED"; exit 1; }
+            # 9router-api
+            docker run -d --name smoke-9router-api -e PORT=20327 -e NINEROUTER_HOME=/app/9router -e DATA_DIR=/tmp/smoke-data -p 20327:20327 9router-9router-api:latest
+            for i in $(seq 1 30); do curl -fsS http://127.0.0.1:20327/api/health >/dev/null 2>&1 && break; sleep 2; done
+            curl -fsS http://127.0.0.1:20327/api/health >/dev/null || { echo "9router-api smoke FAILED"; exit 1; }
+            echo "SMOKE OK"
+      # Only reached when both new images passed the smoke test.
+      - name: Switch to new images & verify
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.TENCENT_HOST }}
+          username: ${{ secrets.TENCENT_USER }}
+          key: ${{ secrets.TENCENT_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/9router
             docker compose up -d --remove-orphans
             docker compose ps
+      # Cleanup only after a successful deploy: dangling images + build cache.
+      # Images still in use (or tagged :prev for rollback) are kept.
+      - name: Prune old images & build cache (after success)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.TENCENT_HOST }}
+          username: ${{ secrets.TENCENT_USER }}
+          key: ${{ secrets.TENCENT_SSH_KEY }}
+          script: |
+            cd /opt/9router
+            docker system prune -f
+            docker builder prune -f
