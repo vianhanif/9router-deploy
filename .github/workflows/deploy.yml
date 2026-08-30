@@ -16,7 +16,7 @@ jobs:
           host: ${{ secrets.TENCENT_HOST }}
           username: ${{ secrets.TENCENT_USER }}
           key: ${{ secrets.TENCENT_SSH_KEY }}
-          source: "docker-compose.yml,proxy/Caddyfile,src/9router/"
+          source: "docker-compose.yml,proxy/Caddyfile,src/9router/Dockerfile,src/9router-api/Dockerfile"
           target: /opt/9router
       - name: Rebuild & restart
         uses: appleboy/ssh-action@v1.0.3
