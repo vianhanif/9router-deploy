@@ -18,8 +18,8 @@ jobs:
           key: ${{ secrets.TENCENT_SSH_KEY }}
           source: "docker-compose.yml,proxy/Caddyfile,src/9router/Dockerfile,src/9router-api/Dockerfile"
           target: /opt/9router
-      # Build does NOT touch the running stack. Tag current images :prev for rollback.
-      - name: Build new images (no impact on running stack)
+      # Tag current images for rollback; build does NOT touch the running stack.
+      - name: Build new images (resolved SHAs, cache-busted)
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.TENCENT_HOST }}
@@ -30,9 +30,17 @@ jobs:
             cd /opt/9router
             docker tag 9router-9router:latest 9router-9router:prev 2>/dev/null || true
             docker tag 9router-9router-api:latest 9router-9router-api:prev 2>/dev/null || true
-            docker compose build 9router 9router-api
+            # Resolve latest commit SHAs so a changed master busts the git-clone layer cache
+            NINEROUTER_SHA=$(git ls-remote https://github.com/vianhanif/9router.git refs/heads/master | cut -f1)
+            APIREPO_SHA=$(git ls-remote https://github.com/vianhanif/9router-api.git refs/heads/master | cut -f1)
+            echo "NINEROUTER_SHA=$NINEROUTER_SHA"
+            echo "APIREPO_SHA=$APIREPO_SHA"
+            docker compose build \
+              --build-arg NINEROUTER_VERSION=$NINEROUTER_SHA \
+              --build-arg APIREPO_VERSION=$APIREPO_SHA \
+              9router 9router-api
       # Run each new image standalone on a scratch port; abort before switching
-      # if either fails to serve /api/health.
+      # if either fails to serve /api/health within 120s.
       - name: Smoke test new images (abort deploy if broken)
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -66,7 +74,6 @@ jobs:
             docker compose up -d --remove-orphans
             docker compose ps
       # Cleanup only after a successful deploy: dangling images + build cache.
-      # Images still in use (or tagged :prev for rollback) are kept.
       - name: Prune old images & build cache (after success)
         uses: appleboy/ssh-action@v1.0.3
         with:

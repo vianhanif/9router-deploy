@@ -7,7 +7,13 @@ ARG NINEROUTER_REPO=https://github.com/vianhanif/9router.git
 ARG NINEROUTER_VERSION=master
 RUN apk add --no-cache git
 WORKDIR /app
-RUN git clone --depth 1 --branch ${NINEROUTER_VERSION} ${NINEROUTER_REPO} /app/source
+# Fetch by ref (branch name or commit SHA). Using git init + fetch supports
+# both, so CI can pass a resolved SHA to bust the clone-layer cache.
+RUN git init /app/source && \
+    cd /app/source && \
+    git remote add origin ${NINEROUTER_REPO} && \
+    git fetch --depth 1 origin ${NINEROUTER_VERSION} && \
+    git checkout FETCH_HEAD
 
 # ---- Stage 2: build ----
 FROM ${NODE_IMAGE} AS builder

@@ -6,7 +6,12 @@ ARG NINEROUTER_REPO=https://github.com/vianhanif/9router.git
 ARG NINEROUTER_VERSION=master
 RUN apk add --no-cache git python3 make g++ linux-headers
 WORKDIR /app
-RUN git clone --depth 1 --branch ${NINEROUTER_VERSION} ${NINEROUTER_REPO} /app/9router
+# Fetch by ref (branch name or commit SHA).
+RUN git init /app/9router && \
+    cd /app/9router && \
+    git remote add origin ${NINEROUTER_REPO} && \
+    git fetch --depth 1 origin ${NINEROUTER_VERSION} && \
+    git checkout FETCH_HEAD
 WORKDIR /app/9router
 RUN npm install --omit=dev --no-audit --no-fund
 
@@ -16,7 +21,12 @@ ARG APIREPO_REPO=https://github.com/vianhanif/9router-api.git
 ARG APIREPO_VERSION=master
 RUN apk add --no-cache git python3 make g++ linux-headers
 WORKDIR /app
-RUN git clone --depth 1 --branch ${APIREPO_VERSION} ${APIREPO_REPO} /app/9router-api
+# Fetch by ref (branch name or commit SHA).
+RUN git init /app/9router-api && \
+    cd /app/9router-api && \
+    git remote add origin ${APIREPO_REPO} && \
+    git fetch --depth 1 origin ${APIREPO_VERSION} && \
+    git checkout FETCH_HEAD
 WORKDIR /app/9router-api
 # Make 9router source available as a sibling so tsconfig path aliases
 # (@/* -> ../9router/src/*, open-sse/* -> ../9router/open-sse/*) resolve
