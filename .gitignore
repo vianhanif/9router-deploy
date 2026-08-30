@@ -4,5 +4,3 @@ cloudflared/*.json
 data/
 data-home/
 proxy/logs/
-src/9router/node_modules/
-src/9router/.next/
