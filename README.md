@@ -1,6 +1,6 @@
 # 9router-deploy
 
-Deployment stack for the **9router** + **9router-api** services on Tencent Cloud (`43.159.44.207`, `/opt/9router`).
+Deployment stack for the **9router** + **9router-api** services on Tencent Cloud (Tencent Cloud VPS, `/opt/9router`).
 
 This repo contains the orchestration and configuration only — no application source. The app code lives in the separate `vianhanif/9router` and `vianhanif/9router-api` repos, which are pulled at Docker build time.
 
