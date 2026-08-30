@@ -8,6 +8,7 @@ services:
   9router:
     build: ./src/9router
     container_name: 9router
+    profiles: ["dashboard"]
     restart: unless-stopped
     env_file: ./env/9router.env
     environment:
@@ -40,8 +41,6 @@ services:
     volumes:
       - ./data/9router:/app/data
       - ./data-home/9router-home:/app/data-home
-    depends_on:
-      9router: { condition: service_healthy }
     networks: [9router-net]
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:20127/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
@@ -59,7 +58,6 @@ services:
       - ./proxy/Caddyfile:/etc/caddy/Caddyfile:ro
     networks: [9router-net]
     depends_on:
-      9router: { condition: service_healthy }
       9router-api: { condition: service_healthy }
     healthcheck:
       test: ["CMD", "pgrep", "caddy"]
