@@ -6,7 +6,7 @@ networks:
 
 services:
   9router:
-    image: decolua/9router:latest
+    build: ./src/9router
     container_name: 9router
     restart: unless-stopped
     env_file: ./env/9router.env
