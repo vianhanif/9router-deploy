@@ -15,7 +15,6 @@ WORKDIR /app
 RUN apk --no-cache upgrade && apk --no-cache add python3 make g++ linux-headers
 
 COPY --from=source /app/source/package.json ./
-COPY --from=source /app/source/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm install
 
 COPY --from=source /app/source ./
