@@ -12,6 +12,14 @@ http://{$SITE_API} {
     encode zstd gzip
 }
 
+# Repoint: 9router.vianhanif.link served from the Tencent stack via caddy (mirrors cloudflared/config.yml.example)
+http://9router.vianhanif.link {
+    reverse_proxy 9router-api:20127 {
+        flush_interval -1
+    }
+    encode zstd gzip
+}
+
 :80 {
     respond "9router: missing site env" 500
 }

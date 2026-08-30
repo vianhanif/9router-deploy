@@ -16,7 +16,7 @@ jobs:
           host: ${{ secrets.TENCENT_HOST }}
           username: ${{ secrets.TENCENT_USER }}
           key: ${{ secrets.TENCENT_SSH_KEY }}
-          source: "docker-compose.yml,proxy/Caddyfile"
+          source: "docker-compose.yml,proxy/Caddyfile,src/9router/"
           target: /opt/9router
       - name: Rebuild & restart
         uses: appleboy/ssh-action@v1.0.3
@@ -27,8 +27,6 @@ jobs:
           script: |
             set -e
             cd /opt/9router
-            # 9router source is pulled from GitHub master during docker build (see Dockerfile stage 1)
-            docker compose pull 9router caddy cloudflared 2>/dev/null || true
-            docker compose build 9router-api
+            docker compose build 9router 9router-api
             docker compose up -d --remove-orphans
             docker compose ps
