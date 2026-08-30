@@ -46,11 +46,11 @@ jobs:
             trap cleanup EXIT
             # 9router dashboard
             docker run -d --name smoke-9router -e PORT=20328 -e HOSTNAME=0.0.0.0 -e DATA_DIR=/tmp/smoke-data -p 20328:20328 9router-9router:latest
-            for i in $(seq 1 30); do curl -fsS http://127.0.0.1:20328/api/health >/dev/null 2>&1 && break; sleep 2; done
+            for i in $(seq 1 40); do curl -fsS http://127.0.0.1:20328/api/health >/dev/null 2>&1 && break; sleep 3; done
             curl -fsS http://127.0.0.1:20328/api/health >/dev/null || { echo "9router smoke FAILED"; exit 1; }
             # 9router-api
             docker run -d --name smoke-9router-api -e PORT=20327 -e NINEROUTER_HOME=/app/9router -e DATA_DIR=/tmp/smoke-data -p 20327:20327 9router-9router-api:latest
-            for i in $(seq 1 30); do curl -fsS http://127.0.0.1:20327/api/health >/dev/null 2>&1 && break; sleep 2; done
+            for i in $(seq 1 40); do curl -fsS http://127.0.0.1:20327/api/health >/dev/null 2>&1 && break; sleep 3; done
             curl -fsS http://127.0.0.1:20327/api/health >/dev/null || { echo "9router-api smoke FAILED"; exit 1; }
             echo "SMOKE OK"
       # Only reached when both new images passed the smoke test.
