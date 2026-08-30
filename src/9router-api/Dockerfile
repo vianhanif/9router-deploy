@@ -18,6 +18,10 @@ RUN apk add --no-cache git python3 make g++ linux-headers
 WORKDIR /app
 RUN git clone --depth 1 --branch ${APIREPO_VERSION} ${APIREPO_REPO} /app/9router-api
 WORKDIR /app/9router-api
+# Make 9router source available as a sibling so tsconfig path aliases
+# (@/* -> ../9router/src/*, open-sse/* -> ../9router/open-sse/*) resolve
+# during the esbuild bundle. Mirrors Stage 3, which copies /app/9router too.
+COPY --from=ninesrc /app/9router /app/9router
 RUN npm install --no-audit --no-fund
 RUN npm run build   # esbuild -> dist/server.js
 
@@ -36,10 +40,17 @@ COPY --from=ninesrc /app/9router /app/9router
 COPY --from=apibuild /app/9router-api/node_modules /app/9router-api/node_modules
 COPY --from=apibuild /app/9router-api/dist /app/9router-api/dist
 COPY --from=apibuild /app/9router-api/package.json /app/9router-api/package.json
-
-# Runtime alias loader: dist/server.js keeps bare `@/...` and `open-sse/...`
-# imports (esbuild --external:@/*). These hooks re-map them to the 9router repo
-# at runtime (same mapping as tsconfig paths: @/* -> ../9router/src/*).
+# server.ts does `require('./package.json')` at runtime; bundled dist/server.js
+# resolves that relative to dist/, so mirror package.json there too.
+RUN cp /app/9router-api/package.json /app/9router-api/dist/package.json
+# CRITICAL: symlink so bare '9router/*' imports resolve at runtime
+RUN ln -s /app/9router /app/9router-api/node_modules/9router
+# Runtime `@/*` alias resolution via Node ESM loader. 9router source (kept
+# external in the esbuild bundle) uses `@/x` and `open-sse/x` as bare
+# specifiers — these are Next.js / tsconfig aliases, not real packages. This
+# loader rewrites them to real file URLs under /app/9router/src and
+# /app/9router/open-sse at import time. Baked into the image via printf so no
+# repo source file is needed.
 RUN cat > /app/9router-api/alias-loader.mjs <<'EOF'
 import { register } from 'node:module';
 import { pathToFileURL } from 'node:url';
@@ -85,9 +96,6 @@ export async function resolve(specifier, context, nextResolve) {
   return nextResolve(specifier, context);
 }
 EOF
-
-# CRITICAL: symlink so bare '9router/*' imports resolve at runtime
-RUN ln -s /app/9router /app/9router-api/node_modules/9router
 WORKDIR /app/9router-api
 EXPOSE 20127
 ENTRYPOINT ["/entrypoint.sh"]
