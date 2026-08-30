@@ -127,8 +127,8 @@ Expected health: `9router`, `9router-api`, `caddy` all `(healthy)`. `cloudflared
 `.github/workflows/deploy.yml` runs on push to `master` (and `repository_dispatch`). It scp's `docker-compose.yml` + `proxy/Caddyfile` to Tencent, rebuilds `9router-api`, and brings the stack up.
 
 Required repository secrets (in `vianhanif/9router-deploy` → Settings → Secrets → Actions):
-- `TENCENT_HOST` = `43.159.44.207`
-- `TENCENT_USER` = `root`
+- TENCENT_HOST=<your-server>
+- TENCENT_USER=<deploy-user>
 - `TENCENT_SSH_KEY` = private SSH key for the Tencent instance
 
 > The env files and data are **not** deployed by CI (recursive gitignore). On a fresh host they must be provisioned once manually (see `env/` and `data/` above).
