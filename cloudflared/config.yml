@@ -4,6 +4,6 @@ credentials-file: /etc/cloudflared/<tunnel-id>.json
 ingress:
   - hostname: 9router-dashboard.vianhanif.link
     service: http://caddy:80
-  - hostname: 9router-api.vianhanif.link
+  - hostname: 9routerapi.vianhanif.link
     service: http://caddy:80
   - service: http_status:404

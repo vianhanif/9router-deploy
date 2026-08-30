@@ -80,7 +80,7 @@ JWT_SECRET=<same jwt secret>
 **`env/caddy.env`**
 ```
 SITE_DASHBOARD=9router-dashboard.vianhanif.link
-SITE_API=9router-api.vianhanif.link
+SITE_API=9routerapi.vianhanif.link
 ```
 
 Notes:
@@ -119,7 +119,7 @@ Expected health: `9router`, `9router-api`, `caddy` all `(healthy)`. `cloudflared
 3. Replace both `<tunnel-id>` placeholders in `/opt/9router/cloudflared/config.yml`.
 4. Add DNS CNAMEs:
    - `9router-dashboard.vianhanif.link` → `<tunnel-id>.cfargotunnel.com`
-   - `9router-api.vianhanif.link` → `<tunnel-id>.cfargotunnel.com`
+   - `9routerapi.vianhanif.link` → `<tunnel-id>.cfargotunnel.com`
 5. `docker compose restart cloudflared` — verify it connects and stops looping.
 
 ## CI/CD (GitHub Actions)
