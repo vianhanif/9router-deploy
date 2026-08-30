@@ -84,7 +84,7 @@ SITE_API=9router-api.vianhanif.link
 ```
 
 Notes:
-- `JWT_SECRET` is copied verbatim from `~/.9router/jwt-secret` — **never rotated** during migration.
+- JWT_SECRET is provisioned through the deployment environment.
 - `NEXT_PUBLIC_*` vars are baked into `decolua/9router:latest` at image build time; runtime overrides only work via `BASE_URL`/`CLOUD_URL` on the server side (SAML/OIDC/settings).
 - `CONTEXT7_API_KEY`, `FIRECRAWL_API_KEY`, `JIRA_*`, `METABASE_*`, `ROUTER9_GATEWAY_KEY` exist only in the origin pm2 env and are **not** read by the app — they are not migrated.
 
