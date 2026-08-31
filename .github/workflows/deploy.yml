@@ -60,6 +60,18 @@ jobs:
             docker run -d --name smoke-9router-api -e PORT=20327 -e NINEROUTER_HOME=/app/9router -e DATA_DIR=/tmp/smoke-data -p 20327:20327 9router-9router-api:latest
             for i in $(seq 1 40); do curl -fsS http://127.0.0.1:20327/api/health >/dev/null 2>&1 && break; sleep 3; done
             curl -fsS http://127.0.0.1:20327/api/health >/dev/null || { echo "9router-api smoke FAILED"; exit 1; }
+            # 9router-api /v1/responses route presence (Codex CLI requires wire_api="responses").
+            # The scratch container has no upstream credentials, so a structured JSON error is
+            # expected. A raw HTML "Cannot POST" 404 means the route is missing from the image
+            # — abort the deploy before switching.
+            RESP_BODY=$(curl -s -X POST http://127.0.0.1:20327/v1/responses \
+              -H "Content-Type: application/json" \
+              -d '{"model":"general","input":"ping"}')
+            echo "smoke /v1/responses: $(echo "$RESP_BODY" | head -c 200)"
+            if echo "$RESP_BODY" | grep -q "Cannot POST"; then
+              echo "9router-api /v1/responses smoke FAILED (route missing)"
+              exit 1
+            fi
             echo "SMOKE OK"
       # Only reached when both new images passed the smoke test.
       - name: Switch to new images & verify
