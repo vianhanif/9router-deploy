@@ -124,7 +124,35 @@ docker compose up -d
 docker compose ps
 ```
 
-Expected health: `9router`, `9router-api`, `caddy` all `(healthy)`. `cloudflared` is configured via `TUNNEL_TOKEN` from `env/cloudflared.env` (remotely-managed, automatically functioning).
+## Local Run
+
+To run the stack locally for development:
+
+1. Copy env templates:
+   ```bash
+   mkdir -p env
+   cp env/9router.env.example env/9router.env
+   cp env/9router-api.env.example env/9router-api.env
+   # Edit env files to add your JWT_SECRET and other secrets.
+   ```
+2. Create data directories:
+   ```bash
+   mkdir -p data/9router data-home/9router-home
+   ```
+3. Start services:
+   ```bash
+   docker compose -f docker-compose.yml -f docker-compose.local.yml --profile dashboard up -d
+   ```
+4. Access endpoints:
+   - Dashboard: `http://localhost:20128`
+   - API: `http://localhost:20127/api/health`
+
+Stop services:
+   ```bash
+   docker compose -f docker-compose.yml -f docker-compose.local.yml --profile dashboard down
+   ```
+
+Expected health: `9router`, `9router-api` (healthy). Caddy and Cloudflare Tunnel are disabled locally.
 
 ## Cloudflare Tunnel
 
