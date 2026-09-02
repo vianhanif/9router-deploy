@@ -1,0 +1,23 @@
+# docker-compose.local.yml
+# Compose file for local development/running the stack locally.
+# Usage:
+#   cp env/9router.env.example env/9router.env
+#   cp env/9router-api.env.example env/9router-api.env
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml --profile dashboard up -d
+#
+# This file overrides caddy and cloudflared services to use a profile that is
+# not activated by default, so they remain stopped when using this file.
+
+services:
+  9router:
+    profiles: ["dashboard"]
+    ports:
+      - "20128:20128"
+  9router-api:
+    # 9router-api has no profile in base; keep it always on
+    ports:
+      - "20127:20127"
+  caddy:
+    profiles: ["local"]
+  cloudflared:
+    profiles: ["local"]
