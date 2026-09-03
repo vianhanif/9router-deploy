@@ -13,7 +13,8 @@ RUN git init /app/9router && \
     git fetch --depth 1 origin ${NINEROUTER_VERSION} && \
     git checkout FETCH_HEAD
 WORKDIR /app/9router
-RUN npm install --omit=dev --no-audit --no-fund
+# Fix arborist crash in npm 10.9.8
+RUN npm install -g npm@11 && npm install --omit=dev --no-audit --no-fund
 
 # ---- Stage 2: 9router-api build ----
 FROM node:22-alpine AS apibuild
@@ -32,7 +33,8 @@ WORKDIR /app/9router-api
 # (@/* -> ../9router/src/*, open-sse/* -> ../9router/open-sse/*) resolve
 # during the esbuild bundle. Mirrors Stage 3, which copies /app/9router too.
 COPY --from=ninesrc /app/9router /app/9router
-RUN npm install --no-audit --no-fund
+# Fix arborist crash in npm 10.9.8
+RUN npm install -g npm@11 && npm install --no-audit --no-fund
 RUN npm run build   # esbuild -> dist/server.js
 
 # ---- Stage 3: runner ----
