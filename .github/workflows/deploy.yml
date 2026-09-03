@@ -6,7 +6,7 @@ on:
     inputs:
       ninerouter_branch:
         description: "9router branch or SHA"
-        default: fix/mcp-gateway-headers-roundtrip
+        default: master
         required: false
       api_branch:
         description: "9router-api branch or SHA"
