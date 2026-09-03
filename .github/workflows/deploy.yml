@@ -4,8 +4,12 @@ on:
     branches: [ master ]
   workflow_dispatch:
     inputs:
-      branch:
-        description: "Branch or SHA to deploy"
+      ninerouter_branch:
+        description: "9router branch or SHA"
+        default: fix/mcp-gateway-headers-roundtrip
+        required: false
+      api_branch:
+        description: "9router-api branch or SHA"
         default: master
         required: false
   repository_dispatch:
@@ -33,17 +37,21 @@ jobs:
           script: |
             set -e
             cd /opt/9router
-            TARGET_BRANCH="${{ github.event.inputs.branch || 'master' }}"
+            NINEROUTER_TARGET="${{ github.event.inputs.ninerouter_branch || 'master' }}"
+            API_TARGET="${{ github.event.inputs.api_branch || 'master' }}"
+
             docker tag 9router-9router:latest 9router-9router:prev 2>/dev/null || true
             docker tag 9router-9router-api:latest 9router-9router-api:prev 2>/dev/null || true
-            if [[ "$TARGET_BRANCH" =~ ^[0-9a-f]{40}$ ]]; then
-              NINEROUTER_SHA=$TARGET_BRANCH
-              APIREPO_SHA=$TARGET_BRANCH
-            else
-              NINEROUTER_SHA=$(git ls-remote https://github.com/vianhanif/9router.git refs/heads/$TARGET_BRANCH | cut -f1)
-              APIREPO_SHA=$(git ls-remote https://github.com/vianhanif/9router-api.git refs/heads/$TARGET_BRANCH | cut -f1)
-            fi
-            echo "Deploying branch/SHA: $TARGET_BRANCH (SHAs: $NINEROUTER_SHA / $APIREPO_SHA)"
+
+            resolve_sha() {
+              if [[ "$1" =~ ^[0-9a-f]{40}$ ]]; then echo "$1";
+              else git ls-remote "$2" refs/heads/"$1" | cut -f1; fi
+            }
+
+            NINEROUTER_SHA=$(resolve_sha "$NINEROUTER_TARGET" "https://github.com/vianhanif/9router.git")
+            APIREPO_SHA=$(resolve_sha "$API_TARGET" "https://github.com/vianhanif/9router-api.git")
+
+            echo "Deploying: 9router=$NINEROUTER_TARGET ($NINEROUTER_SHA), 9router-api=$API_TARGET ($APIREPO_SHA)"
             docker compose build \
               --build-arg NINEROUTER_VERSION=$NINEROUTER_SHA \
               --build-arg APIREPO_VERSION=$APIREPO_SHA \
