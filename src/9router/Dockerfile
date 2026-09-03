@@ -21,10 +21,8 @@ WORKDIR /app
 RUN apk --no-cache upgrade && apk --no-cache add python3 make g++ linux-headers
 
 COPY --from=source /app/source/package.json ./
-# No npm cache mount: node:22-alpine ships npm 11, whose arborist can crash
-# ("Cannot read properties of null (reading 'edgesOut')") on a stale/corrupt
-# persistent cache. Fresh cache per build avoids recurrences at ~30s cost.
-RUN npm install
+# Fix arborist crash ("edgesOut") in npm 10.9.8 by upgrading to stable 11.x
+RUN npm install -g npm@11 && npm install
 
 COPY --from=source /app/source ./
 ENV NEXT_TELEMETRY_DISABLED=1
