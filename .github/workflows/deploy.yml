@@ -106,7 +106,8 @@ jobs:
             cd /opt/9router
             docker compose up -d --remove-orphans --force-recreate
             docker compose ps
-      # Cleanup only after a successful deploy: dangling images + build cache.
+      # Cleanup only after a successful deploy: remove rollback images,
+      # dangling images, and all build cache.
       - name: Prune old images & build cache (after success)
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -114,6 +115,9 @@ jobs:
           username: ${{ secrets.TENCENT_USER }}
           key: ${{ secrets.TENCENT_SSH_KEY }}
           script: |
-            cd /opt/9router
-            docker system prune -f
-            docker builder prune -f
+            # Remove :prev rollback images (safe after successful deploy)
+            docker rmi 9router-9router:prev 9router-9router-api:prev 2>/dev/null || true
+            # Remove dangling images (not referenced by any container)
+            docker image prune -f
+            # Remove all build cache (deploy succeeded, cache no longer needed)
+            docker builder prune -af
