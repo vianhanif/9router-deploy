@@ -31,7 +31,7 @@ jobs:
             docker tag 9router-9router:latest 9router-9router:prev 2>/dev/null || true
             docker tag 9router-9router-api:latest 9router-9router-api:prev 2>/dev/null || true
             # Resolve latest commit SHAs so a changed master busts the git-clone layer cache
-            NINEROUTER_SHA=$(git ls-remote https://github.com/vianhanif/9router.git refs/heads/master | cut -f1)
+            NINEROUTER_SHA=$(git ls-remote https://github.com/vianhanif/9router.git refs/heads/fix/mcp-gateway-headers-roundtrip | cut -f1)
             APIREPO_SHA=$(git ls-remote https://github.com/vianhanif/9router-api.git refs/heads/master | cut -f1)
             echo "NINEROUTER_SHA=$NINEROUTER_SHA"
             echo "APIREPO_SHA=$APIREPO_SHA"
