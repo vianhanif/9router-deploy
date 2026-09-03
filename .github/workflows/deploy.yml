@@ -91,6 +91,10 @@ jobs:
             fi
             echo "SMOKE OK"
       # Only reached when both new images passed the smoke test.
+      # --force-recreate: compose does NOT recreate a service when the image
+      # tag is unchanged, even if the image content changed. Rebuilt images keep
+      # the same tag (9router-9router:latest etc.), so without force-recreate
+      # the old container keeps running and the deploy silently stays stale.
       - name: Switch to new images & verify
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -100,7 +104,7 @@ jobs:
           script: |
             set -e
             cd /opt/9router
-            docker compose up -d --remove-orphans
+            docker compose up -d --remove-orphans --force-recreate
             docker compose ps
       # Cleanup only after a successful deploy: dangling images + build cache.
       - name: Prune old images & build cache (after success)
