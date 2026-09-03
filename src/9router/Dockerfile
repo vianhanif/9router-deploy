@@ -21,7 +21,10 @@ WORKDIR /app
 RUN apk --no-cache upgrade && apk --no-cache add python3 make g++ linux-headers
 
 COPY --from=source /app/source/package.json ./
-RUN --mount=type=cache,target=/root/.npm npm install
+# No npm cache mount: node:22-alpine ships npm 11, whose arborist can crash
+# ("Cannot read properties of null (reading 'edgesOut')") on a stale/corrupt
+# persistent cache. Fresh cache per build avoids recurrences at ~30s cost.
+RUN npm install
 
 COPY --from=source /app/source ./
 ENV NEXT_TELEMETRY_DISABLED=1
