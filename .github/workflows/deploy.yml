@@ -2,6 +2,12 @@ name: deploy
 on:
   push:
     branches: [ master ]
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch or SHA to deploy"
+        default: master
+        required: false
   repository_dispatch:
     types: [ deploy ]
 
@@ -18,8 +24,7 @@ jobs:
           key: ${{ secrets.TENCENT_SSH_KEY }}
           source: "docker-compose.yml,proxy/Caddyfile,src/9router/Dockerfile,src/9router-api/Dockerfile"
           target: /opt/9router
-      # Tag current images for rollback; build does NOT touch the running stack.
-      - name: Build new images (resolved SHAs, cache-busted)
+      - name: Build new images
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.TENCENT_HOST }}
@@ -28,13 +33,17 @@ jobs:
           script: |
             set -e
             cd /opt/9router
+            TARGET_BRANCH="${{ github.event.inputs.branch || 'master' }}"
             docker tag 9router-9router:latest 9router-9router:prev 2>/dev/null || true
             docker tag 9router-9router-api:latest 9router-9router-api:prev 2>/dev/null || true
-            # Resolve latest commit SHAs so a changed master busts the git-clone layer cache
-            NINEROUTER_SHA=$(git ls-remote https://github.com/vianhanif/9router.git refs/heads/fix/mcp-gateway-headers-roundtrip | cut -f1)
-            APIREPO_SHA=$(git ls-remote https://github.com/vianhanif/9router-api.git refs/heads/master | cut -f1)
-            echo "NINEROUTER_SHA=$NINEROUTER_SHA"
-            echo "APIREPO_SHA=$APIREPO_SHA"
+            if [[ "$TARGET_BRANCH" =~ ^[0-9a-f]{40}$ ]]; then
+              NINEROUTER_SHA=$TARGET_BRANCH
+              APIREPO_SHA=$TARGET_BRANCH
+            else
+              NINEROUTER_SHA=$(git ls-remote https://github.com/vianhanif/9router.git refs/heads/$TARGET_BRANCH | cut -f1)
+              APIREPO_SHA=$(git ls-remote https://github.com/vianhanif/9router-api.git refs/heads/$TARGET_BRANCH | cut -f1)
+            fi
+            echo "Deploying branch/SHA: $TARGET_BRANCH (SHAs: $NINEROUTER_SHA / $APIREPO_SHA)"
             docker compose build \
               --build-arg NINEROUTER_VERSION=$NINEROUTER_SHA \
               --build-arg APIREPO_VERSION=$APIREPO_SHA \
