@@ -44,8 +44,7 @@ RUN npm run build   # esbuild -> dist/server.js
 FROM node:22-alpine AS pyheadroom
 RUN apk add --no-cache python3 py3-pip build-base python3-dev linux-headers
 RUN python3 -m venv /opt/headroom-venv \
-    && /opt/headroom-venv/bin/pip install --no-cache-dir --only-binary :all: "headroom-ai[proxy,code,ml]>=0.5.21" \
-    || /opt/headroom-venv/bin/pip install --no-cache-dir "headroom-ai[proxy,code,ml]>=0.5.21"
+    && /opt/headroom-venv/bin/pip install --no-cache-dir --only-binary :all: "headroom-ai[proxy,code]==0.37.0"
 RUN find /opt/headroom-venv -name __pycache__ -type d -prune -exec rm -rf {} + \
     && rm -rf /root/.cache/pip
 
