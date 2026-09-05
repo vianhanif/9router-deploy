@@ -40,23 +40,26 @@ RUN npm run build   # esbuild -> dist/server.js
 # ---- Stage 2.5: headroom-ai Python venv ----
 # Build toolchain + pip live ONLY here; the runner copies just the venv,
 # keeping it free of gcc/musl-dev/headers. Same base tag as the runner so
-# the python3 version and libc match.
-FROM node:22-alpine AS pyheadroom
-RUN apk add --no-cache python3 py3-pip build-base python3-dev linux-headers
+# the python3 version and libc match. Debian (glibc) required: headroom-ai
+# >=0.21 ships only manylinux_2_28 wheels, no musllinux (Alpine).
+FROM node:22-bookworm-slim AS pyheadroom
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-venv \
+    && rm -rf /var/lib/apt/lists/*
 RUN python3 -m venv /opt/headroom-venv \
     && /opt/headroom-venv/bin/pip install --no-cache-dir --only-binary :all: "headroom-ai[proxy,code]==0.37.0"
 RUN find /opt/headroom-venv -name __pycache__ -type d -prune -exec rm -rf {} + \
     && rm -rf /root/.cache/pip
 
 # ---- Stage 3: runner ----
-FROM node:22-alpine
+FROM node:22-bookworm-slim
 ENV NODE_ENV=production \
     PORT=20127 \
     NINEROUTER_HOME=/app/9router \
     HEADROOM_PYTHON=/opt/headroom-venv/bin/python3
-RUN apk add --no-cache su-exec python3 \
+RUN apt-get update && apt-get install -y --no-install-recommends python3 \
+    && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /app/9router /app/data /app/data-home \
-    && printf '#!/bin/sh\nchown -R node:node /app/data /app/data-home 2>/dev/null\nchown -R node:node /app/9router-api /app/9router 2>/dev/null\nexec su-exec node "$@"\n' > /entrypoint.sh \
+    && printf '#!/bin/sh\nchown -R node:node /app/data /app/data-home 2>/dev/null\nchown -R node:node /app/9router-api /app/9router 2>/dev/null\nexec setpriv --reuid=node --regid=node --init-groups "$@"\n' > /entrypoint.sh \
     && chmod +x /entrypoint.sh \
     && ln -s /app/data-home /root/.9router
 
