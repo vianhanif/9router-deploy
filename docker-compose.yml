@@ -16,16 +16,31 @@ services:
       PORT: "20128"
       HOSTNAME: 0.0.0.0
       NODE_ENV: production
+      HEADROOM_URL: http://headroom:8787
     volumes:
       - ./data/9router:/app/data
       - ./data-home/9router-home:/app/data-home
     networks: [9router-net]
+    depends_on:
+      headroom: { condition: service_started }
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:20128/api/health"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 30s
+
+  headroom:
+    image: ghcr.io/chopratejas/headroom:latest
+    container_name: headroom
+    restart: unless-stopped
+    networks: [9router-net]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8787/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   9router-api:
     build:
