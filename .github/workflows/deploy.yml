@@ -107,7 +107,7 @@ jobs:
           script: |
             set -e
             cd /opt/9router
-            docker compose up -d --remove-orphans --force-recreate --profile dashboard
+            docker compose --profile dashboard up -d --remove-orphans --force-recreate
             docker compose stop 9router
             docker compose ps
       # Cleanup only after a successful deploy: remove rollback images,
