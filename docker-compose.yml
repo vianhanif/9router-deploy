@@ -31,12 +31,15 @@ services:
       start_period: 30s
 
   headroom:
-    image: ghcr.io/chopratejas/headroom:latest
+    build:
+      context: ./src/9router-api
+      dockerfile: Dockerfile
     container_name: headroom
+    command: ["/opt/headroom-venv/bin/headroom", "proxy", "--host", "0.0.0.0", "--port", "8787"]
     restart: unless-stopped
     networks: [9router-net]
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8787/health"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 5s
       retries: 3
