@@ -1,181 +1,174 @@
 # 9router-deploy
 
-Deployment stack for the **9router** + **9router-api** services on Tencent Cloud (Tencent Cloud VPS, `/opt/9router`).
-
-This repo mirrors the application source needed to build the stack: the dashboard fork (`vianhanif/9router`) lives under `src/9router/` and the API under `src/9router-api/`. Both are built from source at deploy time; no binary images are pulled for the app services.
+Deployment stack for [9router](https://github.com/lobehub/lobe-chat), an LLM gateway and chat interface. This repository provides Docker Compose configuration for self-hosting 9router with Cloudflare Tunnel ingress.
 
 ## Architecture
 
-| Service | Image / Build | Port | Role |
-|---------|---------------|------|------|
-| `9router` | built from `src/9router/` (fork `vianhanif/9router`) | 20128 | Next.js monolith + dashboard UI |
-| `9router-api` | built from `src/9router-api/Dockerfile` | 20127 | Standalone Express LLM proxy (no UI) |
-| `caddy` | `caddy:alpine` | 80/443 | Reverse proxy / TLS ingress |
-| `cloudflared` | `cloudflare/cloudflared:latest` | — | Cloudflare Tunnel to `vianhanif.link` |
+```mermaid
+flowchart LR
+    subgraph Internet
+        User([User])
+    end
+    subgraph Cloudflare
+        CF[Cloudflare Edge]
+    end
+    subgraph Docker["Docker Compose Stack"]
+        cloudflared[cloudflared]
+        caddy[Caddy]
+        api[9router-api :20127]
+        dashboard[9router :20128]
+        headroom[headroom :8787]
+    end
+    subgraph Storage
+        DB[(SQLite)]
+    end
 
-Public hostnames served (all via Cloudflare Tunnel `9router-tencent` → VPS `cloudflared` → `caddy`):
-- `9router-dashboard.vianhanif.link` → dashboard UI (`9router:20128`)
-- `9routerapi.vianhanif.link` → API (`9router-api:20127`)
-- `9router.vianhanif.link` → API (`9router-api:20127`) — the endpoint used by Warp's custom endpoint
-
-Both `9router` and `9router-api` share the **same SQLite database** via a bind mount (`./data/9router:/app/data`). `9router` runs DB migrations on boot; `9router-api` is read-mostly and `depends_on` a healthy `9router`.
-
-External path: public host → Cloudflare Tunnel → `cloudflared` (port 443) → `caddy` (internal `:80`) → app service.
-
-## Repo layout
-
-```
-.
-├── docker-compose.yml          # full 4-service stack
-├── .env.example                # env template (no real secrets)
-├── .gitignore                  # ignores .env, env/*.env, cloudflared/*.json, data/, data-home/, src/9router/{node_modules,.next}
-├── env/                        # per-service env (gitignored — contains secrets)
-│   ├── 9router.env
-│   ├── 9router-api.env
-│   ├── caddy.env
-│   └── cloudflared.env         # TUNNEL_TOKEN (remotely-managed tunnel)
-├── proxy/
-│   └── Caddyfile               # reverse-proxy rules (dashboard + api hosts)
-├── cloudflared/
-│   ├── config.yml              # tunnel ingress (gitignored real file)
-│   └── config.yml.example
-├── .github/workflows/deploy.yml
-└── src/
-    ├── 9router/                # fork source for docker compose build 9router (node_modules/.next gitignored)
-    │   ├── Dockerfile
-    │   ├── custom-server.js
-    │   ├── open-sse/ …
-    └── 9router-api/            # source for docker compose build 9router-api
-        ├── Dockerfile
-        └── .dockerignore
+    User --> CF --> cloudflared --> caddy
+    caddy --> api
+    caddy --> dashboard
+    dashboard --> headroom
+    api --> DB
+    dashboard --> DB
 ```
 
-## Remote layout (`/opt/9router`)
+**Traffic flow:** User → Cloudflare Edge → `cloudflared` (tunnel) → `caddy` (reverse proxy) → `9router-api` / `9router`
 
-```
-/opt/9router/
-├── docker-compose.yml
-├── env/                        # real env files (gitignored)
-│   └── cloudflared.env         # TUNNEL_TOKEN (remotely-managed tunnel)
-├── data/9router/               # bind-mount -> /app/data (SQLite DB, secrets, runtime state)
-├── data-home/9router-home/     # bind-mount -> /app/data-home
-├── src/9router/                # 9router fork source (build context)
-├── src/9router-api/            # 9router-api source (build context)
-├── proxy/
-└── cloudflared/                # config.yml + <tunnel-id>.json (credentials, never committed)
-```
+## Prerequisites
 
-## Environment setup
+- Docker & Docker Compose v2+
+- Cloudflare account with Zero Trust (free tier works)
+- A domain managed by Cloudflare
 
-The application has **no `.env` file** — it read configuration from pm2 process env and files in `~/.9router/` on the origin machine. For the container deployment the equivalent values are placed in `env/*.env`:
-
-**`env/9router.env`**
-```
-BASE_URL=https://9router-dashboard.vianhanif.link
-CLOUD_URL=https://9router-dashboard.vianhanif.link
-JWT_SECRET=<jwt secret from ~/.9router/jwt-secret>
-DATA_DIR=/app/data
-PORT=20128
-NODE_ENV=production
-```
-
-**`env/9router-api.env`**
-```
-PORT=20127
-NODE_ENV=production
-NINEROUTER_HOME=/app/9router
-DATA_DIR=/app/data
-BASE_URL=https://9router-dashboard.vianhanif.link
-CLOUD_URL=https://9router-dashboard.vianhanif.link
-JWT_SECRET=<same jwt secret>
-```
-
-**`env/caddy.env`**
-```
-SITE_DASHBOARD=9router-dashboard.vianhanif.link
-SITE_API=9routerapi.vianhanif.link
-```
-
-Notes:
-- JWT_SECRET is provisioned through the deployment environment.
-- `NEXT_PUBLIC_*` vars are baked into `decolua/9router:latest` at image build time; runtime overrides only work via `BASE_URL`/`CLOUD_URL` on the server side (SAML/OIDC/settings).
-- `CONTEXT7_API_KEY`, `FIRECRAWL_API_KEY`, `JIRA_*`, `METABASE_*`, `ROUTER9_GATEWAY_KEY` exist only in the origin pm2 env and are **not** read by the app — they are not migrated.
-
-## 9router-api build / runtime quirks
-
-The build and runtime hit several non-obvious issues that are handled inside `src/9router-api/Dockerfile` and the esbuild config. Do not "simplify" these without re-testing.
-
-1. **`@/*` path aliases** — `server.ts` reaches into the `9router` source tree via TS aliases (`@/*` → `../9router/src/*`). The esbuild bundle keeps `9router` **external**, so at runtime Node loads raw 9router source containing `@/*` and extensionless imports Node cannot resolve natively.
-2. **Node ESM loader** — the runner stage bakes an `alias-hook.mjs` registered via `--import` that rewrites `@/*` → `/app/9router/src/*`, `open-sse/*` → `/app/9router/open-sse/*`, `9router/*` → `/app/9router/*`, and resolves extensionless/`index.js` specifiers. Required for the external-9router strategy to run.
-3. **Do NOT inline all of 9router** — removing `--external:9router` bundles `undici` and crashes at runtime with `Dynamic require of "node:assert" is not supported`.
-4. **`require('./package.json')`** — the app reads its own version at runtime relative to `dist/`; the Dockerfile copies `package.json` into `dist/` so it resolves.
-5. **Healthchecks bind IPv4 only** — use `127.0.0.1`, not `localhost` (busybox resolves `localhost` → `::1` and fails). `9router-api` health returns `{"status":"ok","mode":"api-only","version":"..."}`.
-
-## Bring up the stack
+## Quick Start
 
 ```bash
-ssh tencent-cloud
-cd /opt/9router
+# 1. Clone the repository
+git clone https://github.com/vianhanif/9router-deploy.git
+cd 9router-deploy
 
-# Both app services are built from the mirrored sources
-# (src/9router and src/9router-api) that CI syncs to this host.
+# 2. Copy environment templates
+mkdir -p env
+cp env/9router.env.example env/9router.env
+cp env/9router-api.env.example env/9router-api.env
+
+# 3. Configure your JWT secret (must match in both files)
+# Edit env/9router.env and env/9router-api.env
+
+# 4. Create data directories
+mkdir -p data/9router data-home/9router-home
+
+# 5. Start services locally (without tunnel)
+docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+```
+
+Access locally:
+- API: `http://localhost:20127/api/health`
+- Dashboard: `http://localhost:20128` (if using `--profile dashboard`)
+
+## Environment Variables
+
+### 9router.env
+
+| Variable | Description | Example |
+|----------|-------------|--------|
+| `BASE_URL` | Public URL of the dashboard | `https://your-domain.com` |
+| `CLOUD_URL` | Cloud/sync URL (usually same as BASE_URL) | `https://your-domain.com` |
+| `JWT_SECRET` | Secret for JWT signing (must match 9router-api) | `<random-string>` |
+| `DATA_DIR` | Data directory path inside container | `/app/data` |
+| `PORT` | HTTP port | `20128` |
+| `NODE_ENV` | Environment mode | `production` |
+
+### 9router-api.env
+
+| Variable | Description | Example |
+|----------|-------------|--------|
+| `PORT` | HTTP port | `20127` |
+| `NODE_ENV` | Environment mode | `production` |
+| `NINEROUTER_HOME` | Path to 9router source | `/app/9router` |
+| `DATA_DIR` | Data directory path inside container | `/app/data` |
+| `BASE_URL` | Public URL | `https://your-domain.com` |
+| `CLOUD_URL` | Cloud/sync URL | `https://your-domain.com` |
+| `JWT_SECRET` | Secret for JWT signing (must match 9router) | `<random-string>` |
+
+### caddy.env
+
+| Variable | Description | Example |
+|----------|-------------|--------|
+| `SITE_DASHBOARD` | Hostname for dashboard | `dashboard.example.com` |
+| `SITE_API` | Hostname for API | `api.example.com` |
+
+### cloudflared.env
+
+| Variable | Description |
+|----------|-------------|
+| `TUNNEL_TOKEN` | Cloudflare Tunnel token from Zero Trust dashboard |
+
+## Deployment
+
+### Production (with Cloudflare Tunnel)
+
+1. Create a Cloudflare Tunnel in Zero Trust dashboard
+2. Configure public hostnames pointing to `caddy:80`
+3. Copy the tunnel token to `env/cloudflared.env`
+4. Deploy:
+
+```bash
 docker compose build 9router 9router-api
 docker compose up -d
 docker compose ps
 ```
 
-## Local Run
+### GitHub Actions
 
-To run the stack locally for development:
+The included workflow (`.github/workflows/deploy.yml`) deploys on push to `master`.
 
-1. Copy env templates:
-   ```bash
-   mkdir -p env
-   cp env/9router.env.example env/9router.env
-   cp env/9router-api.env.example env/9router-api.env
-   # Edit env files to add your JWT_SECRET and other secrets.
-   ```
-2. Create data directories:
-   ```bash
-   mkdir -p data/9router data-home/9router-home
-   ```
-3. Start services:
-   ```bash
-   docker compose -f docker-compose.yml -f docker-compose.local.yml --profile dashboard up -d
-   ```
-4. Access endpoints:
-   - Dashboard: `http://localhost:20128`
-   - API: `http://localhost:20127/api/health`
+**Required repository secrets:**
 
-Stop services:
-   ```bash
-   docker compose -f docker-compose.yml -f docker-compose.local.yml --profile dashboard down
-   ```
+| Secret | Description |
+|--------|-------------|
+| `TENCENT_HOST` | Deployment server hostname/IP |
+| `TENCENT_USER` | SSH username |
+| `TENCENT_SSH_KEY` | SSH private key for deployment |
 
-Expected health: `9router`, `9router-api` (healthy). Caddy and Cloudflare Tunnel are disabled locally.
+The workflow:
+1. Syncs config files to the server
+2. Builds new Docker images
+3. Runs smoke tests on `/api/health`
+4. Switches to new images if tests pass
+5. Cleans up old images
 
-## Cloudflare Tunnel
+## Services
 
-`cloudflared` runs in **remotely-managed** mode via `TUNNEL_TOKEN` (see `env/cloudflared.env`). Public hostnames are configured in the Cloudflare Zero Trust dashboard under tunnel `9router-tencent`, each mapping to `HTTP → caddy:80`:
-- `9router-dashboard.vianhanif.link`
-- `9routerapi.vianhanif.link`
-- `9router.vianhanif.link`
+| Service | Port | Description |
+|---------|------|-------------|
+| `9router` | 20128 | Next.js dashboard UI (profile-gated, optional) |
+| `9router-api` | 20127 | Express LLM proxy API |
+| `headroom` | 8787 | Token compression/shaping proxy |
+| `caddy` | 80 | Reverse proxy with automatic HTTPS |
+| `cloudflared` | — | Cloudflare Tunnel connector |
 
-Add/remove public hostnames there (dashboard-only; there is no API token for this repo). DNS CNAMEs for these hosts point at the tunnel and are proxied by Cloudflare.
+**Data sharing:** Both `9router` and `9router-api` share SQLite storage via bind mount (`./data/9router:/app/data`).
 
-## CI/CD (GitHub Actions)
+## Repository Structure
 
-`.github/workflows/deploy.yml` runs on push to `master` (and `repository_dispatch`). It scp's `docker-compose.yml`, `proxy/Caddyfile`, and `src/9router/` to Tencent, then runs `docker compose build 9router 9router-api` and brings the stack up.
+```
+├── docker-compose.yml          # Production stack
+├── docker-compose.local.yml    # Local dev overrides
+├── .env.example                # Environment template
+├── env/                        # Per-service env files (gitignored)
+│   ├── 9router.env.example
+│   └── 9router-api.env.example
+├── proxy/
+│   └── Caddyfile               # Reverse proxy config
+├── cloudflared/
+│   └── config.yml.example      # Tunnel config template
+├── src/
+│   ├── 9router/                # Dashboard source
+│   └── 9router-api/            # API source
+└── .github/workflows/
+    └── deploy.yml              # CI/CD workflow
+```
 
-Required repository secrets (in `vianhanif/9router-deploy` → Settings → Secrets → Actions):
-- TENCENT_HOST=<your-server>
-- TENCENT_USER=<deploy-user>
-- `TENCENT_SSH_KEY` = private SSH key for the Tencent instance
+## License
 
-> The env files and data are **not** deployed by CI (recursive gitignore). On a fresh host they must be provisioned once manually (see `env/` and `data/` above).
->
-> Because `src/9router/` ships real upstream OAuth client credentials (already public), this repo should stay **private** — CI/deploy secrets also make it a poor candidate for public exposure.
-
-## Cutover
-
-`9router.vianhanif.link` and the dashboard/API hosts already point at the Tencent tunnel and serve through Caddy (verified live). The optional local pm2 stack (origin Mac) can remain stopped as standby; the API is now fully served from Tencent, independent of the laptop.
+MIT
