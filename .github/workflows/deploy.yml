@@ -34,6 +34,9 @@ jobs:
           host: ${{ secrets.TENCENT_HOST }}
           username: ${{ secrets.TENCENT_USER }}
           key: ${{ secrets.TENCENT_SSH_KEY }}
+          # Next.js build + API image (incl. headroom venv copy) regularly
+          # exceeds the 10m default; keep the session alive for 30m.
+          command_timeout: 30m
           script: |
             set -e
             cd /opt/9router
