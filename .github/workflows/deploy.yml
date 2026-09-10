@@ -43,8 +43,12 @@ jobs:
             set -e
             cd /opt/9router
 
-            NINEROUTER_TARGET="${{ github.event.inputs.ninerouter_branch || 'master' }}"
-            API_TARGET="${{ github.event.inputs.api_branch || 'master' }}"
+            # Safe context mapping for push/dispatch event variants
+            INPUT_NINEROUTER="${{ github.event.inputs.ninerouter_branch }}"
+            INPUT_API="${{ github.event.inputs.api_branch }}"
+
+            NINEROUTER_TARGET="${INPUT_NINEROUTER:-master}"
+            API_TARGET="${INPUT_API:-master}"
 
             docker tag 9router-9router:latest 9router-9router:prev 2>/dev/null || true
             docker tag 9router-9router-api:latest 9router-9router-api:prev 2>/dev/null || true
@@ -57,8 +61,8 @@ jobs:
               fi
             }
 
-            NINEROUTER_SHA=$(resolve_sha "$NINEROUTER_TARGET" "https://github.com/vianhanif/9router.git")
-            APIREPO_SHA=$(resolve_sha "$API_TARGET" "https://github.com/vianhanif/9router-api.git")
+            NINEROUTER_SHA=$(resolve_sha "$NINEROUTER_TARGET" "https://github.com")
+            APIREPO_SHA=$(resolve_sha "$API_TARGET" "https://github.com")
 
             echo "Deploying: 9router=$NINEROUTER_TARGET ($NINEROUTER_SHA), 9router-api=$API_TARGET ($APIREPO_SHA)"
 
@@ -93,11 +97,11 @@ jobs:
               9router-9router:latest
 
             for i in $(seq 1 40); do
-              curl -fsS http://127.0.0.1:20328/api/health >/dev/null 2>&1 && break
+              curl -fsS http://127.0.0 >/dev/null 2>&1 && break
               sleep 3
             done
 
-            curl -fsS http://127.0.0.1:20328/api/health >/dev/null || {
+            curl -fsS http://127.0.0 >/dev/null || {
               echo "9router smoke FAILED"
               docker logs smoke-9router || true
               exit 1
@@ -113,18 +117,18 @@ jobs:
               9router-9router-api:latest
 
             for i in $(seq 1 40); do
-              curl -fsS http://127.0.0.1:20327/api/health >/dev/null 2>&1 && break
+              curl -fsS http://127.0.0 >/dev/null 2>&1 && break
               sleep 3
             done
 
-            curl -fsS http://127.0.0.1:20327/api/health >/dev/null || {
+            curl -fsS http://127.0.0 >/dev/null || {
               echo "9router-api smoke FAILED"
               docker logs smoke-9router-api || true
               exit 1
             }
 
             # 9router-api /v1/responses route presence
-            RESP_BODY=$(curl -s -X POST http://127.0.0.1:20327/v1/responses \
+            RESP_BODY=$(curl -s -X POST http://127.0.0 \
               -H "Content-Type: application/json" \
               -d '{"model":"general","input":"ping"}')
 
@@ -187,7 +191,7 @@ jobs:
             }
 
             # API health check after the actual production switch.
-            curl -fsS http://127.0.0.1:20127/api/health >/dev/null || {
+            curl -fsS http://127.0.0 >/dev/null || {
               echo "ERROR: production 9router-api health check failed"
               docker logs --tail=100 9router-api || true
               exit 1
