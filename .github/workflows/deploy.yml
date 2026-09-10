@@ -81,10 +81,11 @@ jobs:
             set -e
             cd /opt/9router
 
-            # Use different isolated ports for testing to prevent colliding with production
-            DASHBOARD_URL="http://127.0.0"
-            API_URL="http://127.0.0"
-            RESP_URL="http://127.0.0"
+            # Dynamic string mapping to block the runner character stripping sequence
+            LOCAL_HOST="127.0.0.1"
+            DASHBOARD_URL="http://${LOCAL_HOST}:20328/api/health"
+            API_URL="http://${LOCAL_HOST}:20327/api/health"
+            RESP_URL="http://${LOCAL_HOST}:20327/v1/responses"
 
             cleanup() {
               echo "Cleaning up smoke test containers..."
@@ -105,7 +106,7 @@ jobs:
               -v /opt/9router/data/9router:/app/data -v /opt/9router/data-home/9router-home:/app/data-home \
               9router-9router:latest
 
-            echo "Awaiting dashboard boot up..."
+            echo "Awaiting dashboard boot up at ${DASHBOARD_URL}..."
             for i in $(seq 1 20); do
               curl -fsS "$DASHBOARD_URL" >/dev/null 2>&1 && break || true
               sleep 3
@@ -123,7 +124,7 @@ jobs:
               -v /opt/9router/data/9router:/app/data -v /opt/9router/data-home/9router-home:/app/data-home \
               9router-9router-api:latest
 
-            echo "Awaiting api gateway boot up..."
+            echo "Awaiting api gateway boot up at ${API_URL}..."
             for i in $(seq 1 20); do
               curl -fsS "$API_URL" >/dev/null 2>&1 && break || true
               sleep 3
@@ -195,7 +196,9 @@ jobs:
               exit 1
             }
 
-            curl -fsS http://localhost:20127/api/health >/dev/null || {
+            # Use concatenation fallback for production health verification
+            PROD_HOST="127.0.0.1"
+            curl -fsS "http://${PROD_HOST}:20127/api/health" >/dev/null || {
               echo "ERROR: production 9router-api health check failed"
               docker logs --tail=100 9router-api || true
               exit 1
