@@ -72,14 +72,6 @@ services:
       retries: 3
       start_period: 30s
 
-  jira-mcp:
-    image: ghcr.io/sooperset/mcp-atlassian:latest
-    container_name: jira-mcp
-    restart: unless-stopped
-    env_file: ./env/jira-mcp.env
-    command: ["mcp-atlassian", "--transport", "http", "--host", "0.0.0.0", "--port", "9400"]
-    networks: [9router-net]
-
   caddy:
     image: caddy:alpine
     container_name: caddy

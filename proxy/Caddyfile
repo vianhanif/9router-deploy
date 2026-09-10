@@ -20,10 +20,6 @@ http://9router.vianhanif.link {
     encode zstd gzip
 }
 
-http://jira-mcp.internal {
-    reverse_proxy jira-mcp:9400
-}
-
 :80 {
     respond "9router: missing site env" 500
 }
