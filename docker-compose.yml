@@ -82,12 +82,6 @@ services:
     networks: [9router-net]
     depends_on:
       9router-api: { condition: service_healthy }
-    healthcheck:
-      test: ["CMD", "pgrep", "caddy"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
 
   cloudflared:
     image: cloudflare/cloudflared:latest
@@ -97,4 +91,4 @@ services:
     command: tunnel --no-autoupdate run
     networks: [9router-net]
     depends_on:
-      caddy: { condition: service_healthy }
+      caddy: { condition: service_started }

@@ -1,4 +1,5 @@
 name: deploy
+
 on:
   push:
     branches: [ master ]
@@ -18,8 +19,10 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
+
       - name: Sync deploy config
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -28,18 +31,18 @@ jobs:
           key: ${{ secrets.TENCENT_SSH_KEY }}
           source: "docker-compose.yml,proxy/Caddyfile,src/9router/Dockerfile,src/9router-api/Dockerfile"
           target: /opt/9router
+
       - name: Build new images
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.TENCENT_HOST }}
           username: ${{ secrets.TENCENT_USER }}
           key: ${{ secrets.TENCENT_SSH_KEY }}
-          # Next.js build + API image (incl. headroom venv copy) regularly
-          # exceeds the 10m default; keep the session alive for 30m.
           command_timeout: 30m
           script: |
             set -e
             cd /opt/9router
+
             NINEROUTER_TARGET="${{ github.event.inputs.ninerouter_branch || 'master' }}"
             API_TARGET="${{ github.event.inputs.api_branch || 'master' }}"
 
@@ -47,75 +50,153 @@ jobs:
             docker tag 9router-9router-api:latest 9router-9router-api:prev 2>/dev/null || true
 
             resolve_sha() {
-              if [[ "$1" =~ ^[0-9a-f]{40}$ ]]; then echo "$1";
-              else git ls-remote "$2" refs/heads/"$1" | cut -f1; fi
+              if [[ "$1" =~ ^[0-9a-f]{40}$ ]]; then
+                echo "$1"
+              else
+                git ls-remote "$2" refs/heads/"$1" | cut -f1
+              fi
             }
 
             NINEROUTER_SHA=$(resolve_sha "$NINEROUTER_TARGET" "https://github.com/vianhanif/9router.git")
             APIREPO_SHA=$(resolve_sha "$API_TARGET" "https://github.com/vianhanif/9router-api.git")
 
             echo "Deploying: 9router=$NINEROUTER_TARGET ($NINEROUTER_SHA), 9router-api=$API_TARGET ($APIREPO_SHA)"
+
             docker compose build \
               --build-arg NINEROUTER_VERSION=$NINEROUTER_SHA \
               --build-arg APIREPO_VERSION=$APIREPO_SHA \
               9router 9router-api
-      # Run each new image standalone on a scratch port; abort before switching
-      # if either fails to serve /api/health within 120s.
-      - name: Smoke test new images (abort deploy if broken)
+
+      - name: Smoke test new images
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.TENCENT_HOST }}
           username: ${{ secrets.TENCENT_USER }}
           key: ${{ secrets.TENCENT_SSH_KEY }}
+          command_timeout: 10m
           script: |
             set -e
             cd /opt/9router
-            cleanup() { docker rm -f smoke-9router smoke-9router-api >/dev/null 2>&1 || true; }
+
+            cleanup() {
+              docker rm -f smoke-9router smoke-9router-api >/dev/null 2>&1 || true
+            }
             trap cleanup EXIT
+
             # 9router dashboard
-            docker run -d --name smoke-9router -e PORT=20328 -e HOSTNAME=0.0.0.0 -e DATA_DIR=/tmp/smoke-data -p 20328:20328 9router-9router:latest
-            for i in $(seq 1 40); do curl -fsS http://127.0.0.1:20328/api/health >/dev/null 2>&1 && break; sleep 3; done
-            curl -fsS http://127.0.0.1:20328/api/health >/dev/null || { echo "9router smoke FAILED"; exit 1; }
+            docker run -d \
+              --name smoke-9router \
+              -e PORT=20328 \
+              -e HOSTNAME=0.0.0.0 \
+              -e DATA_DIR=/tmp/smoke-data \
+              -p 20328:20328 \
+              9router-9router:latest
+
+            for i in $(seq 1 40); do
+              curl -fsS http://127.0.0.1:20328/api/health >/dev/null 2>&1 && break
+              sleep 3
+            done
+
+            curl -fsS http://127.0.0.1:20328/api/health >/dev/null || {
+              echo "9router smoke FAILED"
+              docker logs smoke-9router || true
+              exit 1
+            }
+
             # 9router-api
-            docker run -d --name smoke-9router-api -e PORT=20327 -e NINEROUTER_HOME=/app/9router -e DATA_DIR=/tmp/smoke-data -p 20327:20327 9router-9router-api:latest
-            for i in $(seq 1 40); do curl -fsS http://127.0.0.1:20327/api/health >/dev/null 2>&1 && break; sleep 3; done
-            curl -fsS http://127.0.0.1:20327/api/health >/dev/null || { echo "9router-api smoke FAILED"; exit 1; }
-            # 9router-api /v1/responses route presence (Codex CLI requires wire_api="responses").
-            # The scratch container has no upstream credentials, so a structured JSON error is
-            # expected. A raw HTML "Cannot POST" 404 means the route is missing from the image
-            # — abort the deploy before switching.
+            docker run -d \
+              --name smoke-9router-api \
+              -e PORT=20327 \
+              -e NINEROUTER_HOME=/app/9router \
+              -e DATA_DIR=/tmp/smoke-data \
+              -p 20327:20327 \
+              9router-9router-api:latest
+
+            for i in $(seq 1 40); do
+              curl -fsS http://127.0.0.1:20327/api/health >/dev/null 2>&1 && break
+              sleep 3
+            done
+
+            curl -fsS http://127.0.0.1:20327/api/health >/dev/null || {
+              echo "9router-api smoke FAILED"
+              docker logs smoke-9router-api || true
+              exit 1
+            }
+
+            # 9router-api /v1/responses route presence
             RESP_BODY=$(curl -s -X POST http://127.0.0.1:20327/v1/responses \
               -H "Content-Type: application/json" \
               -d '{"model":"general","input":"ping"}')
+
             echo "smoke /v1/responses: $(echo "$RESP_BODY" | head -c 200)"
+
             if echo "$RESP_BODY" | grep -q "Cannot POST"; then
               echo "9router-api /v1/responses smoke FAILED (route missing)"
               exit 1
             fi
+
             echo "SMOKE OK"
-      # Only reached when both new images passed the smoke test.
-      # --force-recreate: compose does NOT recreate a service when the image
-      # tag is unchanged, even if the image content changed. Rebuilt images keep
-      # the same tag (9router-9router:latest etc.), so without force-recreate
-      # the old container keeps running and the deploy silently stays stale.
-      # Recreate all services with new images. The 9router dashboard service
-      # is profile-gated — include it so the container uses the latest image,
-      # then stop it immediately (it doesn't need to run post-deploy).
+
       - name: Switch to new images & verify
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.TENCENT_HOST }}
           username: ${{ secrets.TENCENT_USER }}
           key: ${{ secrets.TENCENT_SSH_KEY }}
+          command_timeout: 10m
           script: |
             set -e
             cd /opt/9router
-            docker compose --profile dashboard up -d --remove-orphans --force-recreate
+
+            echo "Starting production stack..."
+
+            docker compose --profile dashboard up -d \
+              --remove-orphans \
+              --force-recreate
+
+            # Dashboard is only needed for building/testing.
+            # API + proxy remain running.
             docker compose stop 9router
+
+            echo
+            echo "Container status:"
             docker compose ps
-      # Cleanup only after a successful deploy: remove rollback images,
-      # dangling images, and all build cache.
-      - name: Prune old images & build cache (after success)
+
+            echo
+            echo "Checking required services..."
+
+            # 9router-api must be running.
+            test "$(docker inspect -f '{{.State.Running}}' 9router-api)" = "true" || {
+              echo "ERROR: 9router-api is not running"
+              docker logs --tail=100 9router-api || true
+              exit 1
+            }
+
+            # Caddy must be running.
+            test "$(docker inspect -f '{{.State.Running}}' caddy)" = "true" || {
+              echo "ERROR: caddy is not running"
+              docker logs --tail=100 caddy || true
+              exit 1
+            }
+
+            # Cloudflared must be running.
+            test "$(docker inspect -f '{{.State.Running}}' cloudflared)" = "true" || {
+              echo "ERROR: cloudflared is not running"
+              docker logs --tail=100 cloudflared || true
+              exit 1
+            }
+
+            # API health check after the actual production switch.
+            curl -fsS http://127.0.0.1:20127/api/health >/dev/null || {
+              echo "ERROR: production 9router-api health check failed"
+              docker logs --tail=100 9router-api || true
+              exit 1
+            }
+
+            echo
+            echo "DEPLOY OK"
+
+      - name: Prune old images & build cache
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.TENCENT_HOST }}
@@ -124,7 +205,9 @@ jobs:
           script: |
             # Remove :prev rollback images (safe after successful deploy)
             docker rmi 9router-9router:prev 9router-9router-api:prev 2>/dev/null || true
-            # Remove dangling images (not referenced by any container)
+
+            # Remove dangling images
             docker image prune -f
-            # Remove all build cache (deploy succeeded, cache no longer needed)
+
+            # Remove all build cache
             docker builder prune -af
