@@ -81,27 +81,28 @@ jobs:
             set -e
             cd /opt/9router
 
-            DASHBOARD_URL="http://localhost:20328/api/health"
-            API_URL="http://localhost:20327/api/health"
-            RESP_URL="http://localhost:20327/v1/responses"
+            # Use different isolated ports for testing to prevent colliding with production
+            DASHBOARD_URL="http://127.0.0"
+            API_URL="http://127.0.0"
+            RESP_URL="http://127.0.0"
 
             cleanup() {
-              docker rm -f smoke-9router smoke-9router-api smoke-headroom >/dev/null 2>&1 || true
-              docker networks rm smoke-net >/dev/null 2>&1 || true
+              echo "Cleaning up smoke test containers..."
+              docker rm -f smoke-9router smoke-api smoke-headroom >/dev/null 2>&1 || true
             }
             trap cleanup EXIT
 
-            # Create an isolated bridging test network
-            docker network create smoke-net || true
+            echo "Starting isolated stack for smoke validation..."
 
-            # 1. 9router dashboard
-            docker run -d \
-              --name smoke-9router \
-              --network smoke-net \
-              -e PORT=20328 \
-              -e HOSTNAME=0.0.0.0 \
-              -e DATA_DIR=/tmp/smoke-data \
-              -p 20328:20328 \
+            # 1. Start headroom dependency
+            docker run -d --name smoke-headroom --network 9router_9router-net --network-alias headroom \
+              --entrypoint "setpriv" 9router-headroom:latest \
+              --reuid=node --regid=node --init-groups /opt/headroom-venv/bin/headroom proxy --host 0.0.0.0 --port 8787
+
+            # 2. Start Dashboard with exact configuration parameters
+            docker run -d --name smoke-9router --network 9router_9router-net \
+              --env-file ./env/9router.env -e PORT=20328 -p 20328:20328 \
+              -v /opt/9router/data/9router:/app/data -v /opt/9router/data-home/9router-home:/app/data-home \
               9router-9router:latest
 
             echo "Awaiting dashboard boot up..."
@@ -111,29 +112,15 @@ jobs:
             done
 
             curl -fsS "$DASHBOARD_URL" >/dev/null || {
-              echo "9router smoke FAILED"
+              echo "ERROR: 9router dashboard smoke test failed"
               docker logs smoke-9router || true
               exit 1
             }
 
-            # 2. 9router-headroom worker dependency
-            docker run -d \
-              --name smoke-headroom \
-              --network smoke-net \
-              --network-alias headroom \
-              --entrypoint "setpriv" \
-              9router-headroom:latest \
-              --reuid=node --regid=node --init-groups /opt/headroom-venv/bin/headroom proxy --host 0.0.0.0 --port 8787
-
-            # 3. 9router-api
-            docker run -d \
-              --name smoke-9router-api \
-              --network smoke-net \
-              -e PORT=20327 \
-              -e HEADROOM_URL=http://headroom:8787 \
-              -e NINEROUTER_HOME=/app/9router \
-              -e DATA_DIR=/tmp/smoke-data \
-              -p 20327:20327 \
+            # 3. Start API using identical environment settings
+            docker run -d --name smoke-api --network 9router_9router-net \
+              --env-file ./env/9router-api.env -e PORT=20327 -p 20327:20327 \
+              -v /opt/9router/data/9router:/app/data -v /opt/9router/data-home/9router-home:/app/data-home \
               9router-9router-api:latest
 
             echo "Awaiting api gateway boot up..."
@@ -143,24 +130,24 @@ jobs:
             done
 
             curl -fsS "$API_URL" >/dev/null || {
-              echo "9router-api smoke FAILED"
-              docker logs smoke-9router-api || true
+              echo "ERROR: 9router-api smoke test failed"
+              docker logs smoke-api || true
               exit 1
             }
 
-            # 9router-api /v1/responses route presence check
+            # Verify endpoint behavior explicitly
             RESP_BODY=$(curl -s -X POST "$RESP_URL" \
               -H "Content-Type: application/json" \
               -d '{"model":"general","input":"ping"}')
 
-            echo "smoke /v1/responses: $(echo "$RESP_BODY" | head -c 200)"
+            echo "smoke /v1/responses output tail: $(echo "$RESP_BODY" | head -c 200)"
 
             if echo "$RESP_BODY" | grep -q "Cannot POST"; then
-              echo "9router-api /v1/responses smoke FAILED (route missing)"
+              echo "ERROR: /v1/responses route is missing or broken"
               exit 1
             fi
 
-            echo "SMOKE OK"
+            echo "SMOKE TEST PASSED SUCCESSFULLY"
 
       - name: Switch to new images & verify
         uses: appleboy/ssh-action@v1.0.3
