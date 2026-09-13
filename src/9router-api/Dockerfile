@@ -59,7 +59,7 @@ ENV NODE_ENV=production \
 RUN apt-get update && apt-get install -y --no-install-recommends python3 \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /app/9router /app/data /app/data-home \
-    && printf '#!/bin/sh\nchown -R node:node /app/data /app/data-home 2>/dev/null\nchown -R node:node /app/9router-api /app/9router 2>/dev/null\nexec setpriv --reuid=node --regid=node --init-groups "$@"\n' > /entrypoint.sh \
+    && printf '#!/bin/sh\n# Fix mounted volume ownership (top-level only, non-blocking)\nchown node:node /app/data /app/data-home 2>/dev/null || true\nexec setpriv --reuid=node --regid=node --init-groups "$@"\n' > /entrypoint.sh \
     && chmod +x /entrypoint.sh \
     && ln -s /app/data-home /root/.9router
 
@@ -73,6 +73,8 @@ COPY --from=pyheadroom /opt/headroom-venv /opt/headroom-venv
 RUN cp /app/9router-api/package.json /app/9router-api/dist/package.json
 # CRITICAL: symlink so bare '9router/*' imports resolve at runtime
 RUN ln -s /app/9router /app/9router-api/node_modules/9router
+# Set ownership at build time (avoids slow runtime chown)
+RUN chown -R node:node /app/9router-api /app/9router
 # Runtime `@/*` alias resolution via Node ESM loader. 9router source (kept
 # external in the esbuild bundle) uses `@/x` and `open-sse/x` as bare
 # specifiers — these are Next.js / tsconfig aliases, not real packages. This
