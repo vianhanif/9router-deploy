@@ -196,8 +196,22 @@ jobs:
               exit 1
             }
 
-            # Use concatenation fallback for production health verification
+            # Wait for production 9router-api to become ready
             PROD_HOST="127.0.0.1"
+
+            echo "Waiting for production 9router-api..."
+
+            for i in $(seq 1 20); do
+              if curl -fsS "http://${PROD_HOST}:20127/api/health" >/dev/null 2>&1; then
+                echo "9router-api is ready"
+                break
+              fi
+
+              echo "9router-api not ready yet ($i/20)..."
+              sleep 2
+            done
+
+            # Final health verification
             curl -fsS "http://${PROD_HOST}:20127/api/health" >/dev/null || {
               echo "ERROR: production 9router-api health check failed"
               docker logs --tail=100 9router-api || true
