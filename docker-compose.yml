@@ -61,6 +61,7 @@ services:
       PORT: "20127"
       NODE_ENV: production
       NINEROUTER_HOME: /app/9router
+      NPM_CONFIG_CACHE: /home/node/.npm
     volumes:
       - ./data/9router:/app/data
       - ./data-home/9router-home:/app/data-home
