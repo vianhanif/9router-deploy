@@ -196,13 +196,14 @@ jobs:
               exit 1
             }
 
-            # Wait for production 9router-api to become ready
-            PROD_HOST="127.0.0.1"
-
+            # Verify production 9router-api from inside the container.
+            # Port 20127 is intentionally not published to the VPS host.
             echo "Waiting for production 9router-api..."
 
             for i in $(seq 1 20); do
-              if curl -fsS "http://${PROD_HOST}:20127/api/health" >/dev/null 2>&1; then
+              if docker exec 9router-api node -e \
+                "fetch('http://127.0.0.1:20127/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+              then
                 echo "9router-api is ready"
                 break
               fi
@@ -212,11 +213,12 @@ jobs:
             done
 
             # Final health verification
-            curl -fsS "http://${PROD_HOST}:20127/api/health" >/dev/null || {
-              echo "ERROR: production 9router-api health check failed"
-              docker logs --tail=100 9router-api || true
-              exit 1
-            }
+            docker exec 9router-api node -e \
+              "fetch('http://127.0.0.1:20127/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))" || {
+                echo "ERROR: production 9router-api health check failed"
+                docker logs --tail=100 9router-api || true
+                exit 1
+              }
 
             echo
             echo "DEPLOY OK"
