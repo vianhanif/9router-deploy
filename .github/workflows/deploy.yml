@@ -60,8 +60,8 @@ jobs:
               fi
             }
 
-            NINEROUTER_SHA=$(resolve_sha "$NINEROUTER_TARGET" "https://github.com/vianhanif/9router.git")
-            APIREPO_SHA=$(resolve_sha "$API_TARGET" "https://github.com/vianhanif/9router-api.git")
+            NINEROUTER_SHA=$(resolve_sha "$NINEROUTER_TARGET" "https://github.com")
+            APIREPO_SHA=$(resolve_sha "$API_TARGET" "https://github.com")
 
             echo "Deploying: 9router=$NINEROUTER_TARGET ($NINEROUTER_SHA), 9router-api=$API_TARGET ($APIREPO_SHA)"
 
@@ -217,30 +217,3 @@ jobs:
             docker rmi 9router-9router:prev 9router-9router-api:prev 2>/dev/null || true
             docker image prune -f
             docker builder prune -af
-
-      - name: Rollback on failure (any prior step failed)
-        if: failure()
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.TENCENT_HOST }}
-          username: ${{ secrets.TENCENT_USER }}
-          key: ${{ secrets.TENCENT_SSH_KEY }}
-          command_timeout: 10m
-          script: |
-            set -e
-            cd /opt/9router
-            echo "Deployment failed — restoring previous images and cleaning up smoke containers..."
-            # 1. Remove smoke containers that the workflow may have left behind
-            docker rm -f smoke-9router smoke-api smoke-headroom >/dev/null 2>&1 || true
-            # 2. Restore previous images (if any) so production keeps running
-            if docker image inspect 9router-9router:prev >/dev/null 2>&1; then
-              docker tag 9router-9router:prev 9router-9router:latest
-            fi
-            if docker image inspect 9router-9router-api:prev >/dev/null 2>&1; then
-              docker tag 9router-9router-api:prev 9router-9router-api:latest
-            fi
-            # 3. Recreate the production stack from the restored images
-            docker compose --profile dashboard up -d --remove-orphans --force-recreate || true
-            docker compose stop 9router || true
-            docker compose ps
-            echo "ROLLBACK OK"
