@@ -60,8 +60,8 @@ jobs:
               fi
             }
 
-            NINEROUTER_SHA=$(resolve_sha "$NINEROUTER_TARGET" "https://github.com")
-            APIREPO_SHA=$(resolve_sha "$API_TARGET" "https://github.com")
+            NINEROUTER_SHA=$(resolve_sha "$NINEROUTER_TARGET" "https://github.com/vianhanif/9router.git")
+            APIREPO_SHA=$(resolve_sha "$API_TARGET" "https://github.com/vianhanif/9router-api.git")
 
             echo "Deploying: 9router=$NINEROUTER_TARGET ($NINEROUTER_SHA), 9router-api=$API_TARGET ($APIREPO_SHA)"
 

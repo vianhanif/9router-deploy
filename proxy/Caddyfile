@@ -1,11 +1,11 @@
-http://{$SITE_DASHBOARD} {
+{$SITE_DASHBOARD} {
     reverse_proxy 9router:20128 {
         flush_interval -1
     }
     encode zstd gzip
 }
 
-http://{$SITE_API} {
+{$SITE_API} {
     reverse_proxy 9router-api:20127 {
         flush_interval -1
     }
