@@ -167,10 +167,6 @@ jobs:
               --remove-orphans \
               --force-recreate
 
-            # Dashboard is only needed for building/testing.
-            # API + proxy remain running.
-            docker compose stop 9router
-
             echo
             echo "Container status:"
             docker compose ps
@@ -257,6 +253,5 @@ jobs:
             fi
             # 3. Recreate the production stack from the restored images
             docker compose --profile dashboard up -d --remove-orphans --force-recreate || true
-            docker compose stop 9router || true
             docker compose ps
             echo "ROLLBACK OK"
