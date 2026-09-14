@@ -16,6 +16,10 @@ on:
   repository_dispatch:
     types: [ deploy ]
 
+concurrency:
+  group: deploy-9router
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -51,13 +55,20 @@ jobs:
 
             docker tag 9router-9router:latest 9router-9router:prev 2>/dev/null || true
             docker tag 9router-9router-api:latest 9router-9router-api:prev 2>/dev/null || true
+            docker tag 9router-headroom:latest 9router-headroom:prev 2>/dev/null || true
 
             resolve_sha() {
-              if [[ "$1" =~ ^[0-9a-f]{40}$ ]]; then
-                echo "$1"
-              else
-                git ls-remote "$2" refs/heads/"$1" | cut -f1
+              local ref="$1" repo="$2" sha
+              if [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+                echo "$ref"
+                return
               fi
+              sha=$(git ls-remote "$repo" refs/heads/"$ref" 2>/dev/null | cut -f1)
+              if [[ -z "$sha" ]]; then
+                echo "ERROR: cannot resolve ref '$ref' in $repo" >&2
+                exit 1
+              fi
+              echo "$sha"
             }
 
             NINEROUTER_SHA=$(resolve_sha "$NINEROUTER_TARGET" "https://github.com/vianhanif/9router.git")
@@ -95,14 +106,19 @@ jobs:
 
             echo "Starting isolated stack for smoke validation..."
 
-            # 1. Start headroom dependency
-            docker run -d --name smoke-headroom --network 9router_9router-net --network-alias headroom \
+            # 1. Start headroom dependency. Use a UNIQUE alias — reusing the live
+            #    `headroom` alias on the shared network would let Docker DNS route
+            #    production traffic to this throwaway container.
+            docker run -d --name smoke-headroom --network 9router_9router-net --network-alias smoke-headroom \
               --entrypoint "setpriv" 9router-headroom:latest \
               --reuid=node --regid=node --init-groups /opt/headroom-venv/bin/headroom proxy --host 0.0.0.0 --port 8787
 
-            # 2. Start Dashboard with exact configuration parameters
+            # 2. Start Dashboard with exact configuration parameters.
+            #    Ports bind to 127.0.0.1 only so the throwaway instance is never
+            #    exposed on the VPS public interface.
             docker run -d --name smoke-9router --network 9router_9router-net \
-              --env-file ./env/9router.env -e PORT=20328 -p 20328:20328 \
+              --env-file ./env/9router.env -e PORT=20328 -e HEADROOM_URL=http://smoke-headroom:8787 \
+              -p 127.0.0.1:20328:20328 \
               -v /opt/9router/data/9router:/app/data -v /opt/9router/data-home/9router-home:/app/data-home \
               9router-9router:latest
 
@@ -120,7 +136,8 @@ jobs:
 
             # 3. Start API using identical environment settings
             docker run -d --name smoke-api --network 9router_9router-net \
-              --env-file ./env/9router-api.env -e PORT=20327 -p 20327:20327 \
+              --env-file ./env/9router-api.env -e PORT=20327 \
+              -p 127.0.0.1:20327:20327 \
               -v /opt/9router/data/9router:/app/data -v /opt/9router/data-home/9router-home:/app/data-home \
               9router-9router-api:latest
 
@@ -227,7 +244,7 @@ jobs:
           key: ${{ secrets.TENCENT_SSH_KEY }}
           script: |
             # Scoped to this project's own image refs — safe on a shared daemon.
-            docker rmi 9router-9router:prev 9router-9router-api:prev 2>/dev/null || true
+            docker rmi 9router-9router:prev 9router-9router-api:prev 9router-headroom:prev 2>/dev/null || true
             # Scope image cleanup to the 9router compose project (label filter)
             # with a 24h age floor, so the co-located opencode-sandbox stack's
             # fresh dangling layers/cache are never collected from here.
@@ -257,7 +274,7 @@ jobs:
             #    failure before the build produced a new image leaves production
             #    untouched and must not trigger an ingress blip.
             NEED_RECREATE=0
-            for svc in 9router 9router-api; do
+            for svc in 9router-9router 9router-9router-api 9router-headroom; do
               if docker image inspect "$svc:prev" >/dev/null 2>&1; then
                 CUR_ID=$(docker image inspect "$svc:latest" --format '{{.Id}}' 2>/dev/null || true)
                 PREV_ID=$(docker image inspect "$svc:prev" --format '{{.Id}}')
