@@ -1,0 +1,302 @@
+name: preview
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch or SHA to test"
+        required: true
+      type:
+        description: "Service to deploy"
+        required: true
+        default: "select"
+        type: choice
+        options:
+          - select
+          - dashboard
+          - api
+          - both
+      action:
+        description: "Deploy or teardown preview"
+        required: true
+        default: "deploy"
+        type: choice
+        options:
+          - deploy
+          - teardown
+  repository_dispatch:
+    types: [preview]
+
+concurrency:
+  group: preview-9router-deploy
+  cancel-in-progress: false
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve service type
+        id: resolve-type
+        run: |
+          TYPE="${{ github.event.inputs.type || github.event.client_payload.type }}"
+          BRANCH="${{ github.event.inputs.branch || github.event.client_payload.branch }}"
+          ACTION="${{ github.event.inputs.action || github.event.client_payload.action }}"
+
+          echo "type=$TYPE" >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "action=$ACTION" >> "$GITHUB_OUTPUT"
+
+          # type=select on non-master = fail
+          if [[ "$TYPE" == "select" && "$BRANCH" != "master" ]]; then
+            echo "ERROR: type=select requires explicit service choice for non-master branches"
+            echo "Choose 'dashboard', 'api', or 'both'"
+            exit 1
+          fi
+
+          # type=select + master -> both
+          if [[ "$TYPE" == "select" && "$BRANCH" == "master" ]]; then
+            TYPE="both"
+            echo "type=$TYPE" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "Resolved: type=$TYPE, branch=$BRANCH, action=$ACTION"
+
+      - name: Teardown existing preview (before deploy)
+        if: steps.resolve-type.outputs.action == 'deploy'
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.TENCENT_HOST }}
+          username: ${{ secrets.TENCENT_USER }}
+          key: ${{ secrets.TENCENT_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/9router
+            echo "Tearing down existing preview stack (if any)..."
+            docker compose -f docker-compose.preview.yml -p 9router-preview down -v 2>/dev/null || true
+            echo "Preview teardown complete"
+
+      - name: Teardown preview (explicit)
+        if: steps.resolve-type.outputs.action == 'teardown'
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.TENCENT_HOST }}
+          username: ${{ secrets.TENCENT_USER }}
+          key: ${{ secrets.TENCENT_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/9router
+            echo "Tearing down preview stack..."
+            docker compose -f docker-compose.preview.yml -p 9router-preview down -v
+            echo "PREVIEW TEARDOWN OK"
+
+      - name: Sync preview config
+        if: steps.resolve-type.outputs.action == 'deploy'
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.TENCENT_HOST }}
+          username: ${{ secrets.TENCENT_USER }}
+          key: ${{ secrets.TENCENT_SSH_KEY }}
+          source: "docker-compose.preview.yml,proxy/Caddyfile.preview,src/9router/Dockerfile,src/9router-api/Dockerfile"
+          target: /opt/9router
+
+      - name: Seed preview data
+        if: steps.resolve-type.outputs.action == 'deploy'
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.TENCENT_HOST }}
+          username: ${{ secrets.TENCENT_USER }}
+          key: ${{ secrets.TENCENT_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/9router
+            echo "Seeding preview data from prod (if not already seeded)..."
+
+            if [ ! -d "./data-preview/9router" ] || [ -z "$(ls -A ./data-preview/9router 2>/dev/null)" ]; then
+              echo "Preview data empty — copying from prod..."
+              mkdir -p ./data-preview/9router
+              rsync -av ./data/9router/ ./data-preview/9router/
+              echo "Preview data seeded"
+            else
+              echo "Preview data already exists — skipping seed"
+            fi
+
+      - name: Build preview images
+        if: steps.resolve-type.outputs.action == 'deploy'
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.TENCENT_HOST }}
+          username: ${{ secrets.TENCENT_USER }}
+          key: ${{ secrets.TENCENT_SSH_KEY }}
+          command_timeout: 30m
+          script: |
+            set -e
+            cd /opt/9router
+
+            BRANCH="${{ steps.resolve-type.outputs.branch }}"
+            TYPE="${{ steps.resolve-type.outputs.type }}"
+
+            resolve_sha() {
+              local ref="$1" repo="$2" sha
+              if [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+                echo "$ref"
+                return
+              fi
+              sha=$(git ls-remote "$repo" refs/heads/"$ref" 2>/dev/null | cut -f1)
+              if [[ -z "$sha" ]]; then
+                echo "ERROR: cannot resolve ref '$ref' in $repo" >&2
+                exit 1
+              fi
+              echo "$sha"
+            }
+
+            # Both repos are pinned to the requested branch for preview
+            NINEROUTER_SHA=$(resolve_sha "$BRANCH" "https://github.com/vianhanif/9router.git")
+            APIREPO_SHA=$(resolve_sha "$BRANCH" "https://github.com/vianhanif/9router-api.git")
+
+            echo "Building preview: branch=$BRANCH ($NINEROUTER_SHA / $APIREPO_SHA), type=$TYPE"
+
+            SERVICES=""
+            if [[ "$TYPE" == "dashboard" || "$TYPE" == "both" ]]; then
+              SERVICES="$SERVICES 9router-test"
+            fi
+            if [[ "$TYPE" == "api" || "$TYPE" == "both" ]]; then
+              SERVICES="$SERVICES 9router-api-test headroom-test"
+            fi
+
+            docker compose -f docker-compose.preview.yml -p 9router-preview build \
+              --build-arg NINEROUTER_VERSION=$NINEROUTER_SHA \
+              --build-arg APIREPO_VERSION=$APIREPO_SHA \
+
+      - name: Start preview stack
+        if: steps.resolve-type.outputs.action == 'deploy'
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.TENCENT_HOST }}
+          username: ${{ secrets.TENCENT_USER }}
+          key: ${{ secrets.TENCENT_SSH_KEY }}
+          command_timeout: 10m
+          script: |
+            set -e
+            cd /opt/9router
+
+            TYPE="${{ steps.resolve-type.outputs.type }}"
+
+            echo "Starting preview stack: type=$TYPE"
+
+            PROFILE_ARG=""
+            if [[ "$TYPE" == "dashboard" || "$TYPE" == "both" ]]; then
+              PROFILE_ARG="--profile dashboard"
+            fi
+
+            # Isolated project name keeps prod's `--remove-orphans` from reaping us
+            docker compose -f docker-compose.preview.yml -p 9router-preview up -d \
+              $PROFILE_ARG \
+              --force-recreate
+
+            echo
+            echo "Preview container status:"
+            docker compose -f docker-compose.preview.yml -p 9router-preview ps
+
+            echo
+            echo "Checking required services..."
+
+            # caddy-test is always required — it is the ingress target
+            test "$(docker inspect -f '{{.State.Running}}' caddy-test)" = "true" || {
+              echo "ERROR: caddy-test is not running"
+              docker logs --tail=100 caddy-test || true
+              exit 1
+            }
+
+            wait_api() {
+              for i in $(seq 1 20); do
+                if docker exec 9router-api-test node -e \
+                  "fetch('http://127.0.0.1:20127/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+                then
+                  return 0
+                fi
+                echo "9router-api-test not ready yet ($i/20)..."
+                sleep 2
+              done
+              return 1
+            }
+
+            wait_dashboard() {
+              for i in $(seq 1 20); do
+                if docker exec 9router-test wget -qO- http://127.0.0.1:20128/api/health >/dev/null 2>&1; then
+                  return 0
+                fi
+                echo "9router-test not ready yet ($i/20)..."
+                sleep 2
+              done
+              return 1
+            }
+
+            if [[ "$TYPE" == "api" || "$TYPE" == "both" ]]; then
+              test "$(docker inspect -f '{{.State.Running}}' 9router-api-test)" = "true" || {
+                echo "ERROR: 9router-api-test is not running"
+                docker logs --tail=100 9router-api-test || true
+                exit 1
+              }
+              wait_api || {
+                echo "ERROR: 9router-api-test health check failed"
+                docker logs --tail=100 9router-api-test || true
+                exit 1
+              }
+              echo "9router-api-test is healthy"
+            fi
+
+            if [[ "$TYPE" == "dashboard" || "$TYPE" == "both" ]]; then
+              test "$(docker inspect -f '{{.State.Running}}' 9router-test)" = "true" || {
+                echo "ERROR: 9router-test is not running"
+                docker logs --tail=100 9router-test || true
+                exit 1
+              }
+              wait_dashboard || {
+                echo "ERROR: 9router-test health check failed"
+                docker logs --tail=100 9router-test || true
+                exit 1
+              }
+              echo "9router-test is healthy"
+            fi
+
+            echo
+            echo "PREVIEW DEPLOY OK"
+
+      - name: Verify via Cloudflare edge
+        if: steps.resolve-type.outputs.action == 'deploy'
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.TENCENT_HOST }}
+          username: ${{ secrets.TENCENT_USER }}
+          key: ${{ secrets.TENCENT_SSH_KEY }}
+          script: |
+            set -e
+            TYPE="${{ steps.resolve-type.outputs.type }}"
+
+            echo "Verifying preview through Cloudflare edge..."
+
+            if [[ "$TYPE" == "api" || "$TYPE" == "both" ]]; then
+              echo "Testing https://9router-test.vianhanif.link/api/health"
+              curl -fsS https://9router-test.vianhanif.link/api/health >/dev/null || {
+                echo "ERROR: 9router-test.vianhanif.link/api/health failed via CF edge"
+                exit 1
+              }
+              echo "✓ API reachable via CF edge"
+            fi
+
+            if [[ "$TYPE" == "dashboard" || "$TYPE" == "both" ]]; then
+              echo "Testing https://9router-dashboard-test.vianhanif.link/api/health"
+              curl -fsS https://9router-dashboard-test.vianhanif.link/api/health >/dev/null || {
+                echo "ERROR: 9router-dashboard-test.vianhanif.link/api/health failed via CF edge"
+                exit 1
+              }
+              echo "✓ Dashboard reachable via CF edge"
+            fi
+
+            echo
+            echo "EDGE VERIFICATION OK"
+
+              $SERVICES
