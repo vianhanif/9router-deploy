@@ -3,4 +3,5 @@ env/*.env
 cloudflared/*.json
 data/
 data-home/
+data-preview/
 proxy/logs/
