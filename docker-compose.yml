@@ -1,5 +1,12 @@
 name: 9router
 
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+    compress: "true"
+
 networks:
   9router-net:
     driver: bridge
@@ -10,6 +17,7 @@ services:
     container_name: 9router
     profiles: ["dashboard"]
     restart: unless-stopped
+    logging: *default-logging
     env_file: ./env/9router.env
     environment:
       DATA_DIR: /app/data
@@ -38,6 +46,7 @@ services:
     entrypoint: ["setpriv", "--reuid=node", "--regid=node", "--init-groups", "/opt/headroom-venv/bin/headroom"]
     command: ["proxy", "--host", "0.0.0.0", "--port", "8787"]
     restart: unless-stopped
+    logging: *default-logging
     networks: [9router-net]
     environment:
       HOME: /home/node
@@ -56,6 +65,7 @@ services:
       dockerfile: Dockerfile
     container_name: 9router-api
     restart: unless-stopped
+    logging: *default-logging
     env_file: ./env/9router-api.env
     environment:
       PORT: "20127"
@@ -77,6 +87,7 @@ services:
     image: caddy:alpine
     container_name: caddy
     restart: unless-stopped
+    logging: *default-logging
     env_file: ./env/caddy.env
     volumes:
       - ./proxy/Caddyfile:/etc/caddy/Caddyfile:ro
@@ -85,9 +96,10 @@ services:
       9router-api: { condition: service_healthy }
 
   cloudflared:
-    image: cloudflare/cloudflared:latest
+    image: cloudflare/cloudflared:2026.9.1
     container_name: cloudflared
     restart: unless-stopped
+    logging: *default-logging
     env_file: ./env/cloudflared.env
     command: tunnel --no-autoupdate run
     networks: [9router-net]

@@ -253,7 +253,7 @@ jobs:
               --filter "until=24h"
             # NEVER `docker builder prune -af` on a shared VPS: it evicts the
             # BuildKit cache of every project on the daemon. Age-bound it.
-            docker builder prune -f --filter "until=168h"
+            docker builder prune -f --filter "until=72h"
 
       - name: Rollback on failure (any prior step failed)
         if: failure()
