@@ -112,5 +112,5 @@ services:
     networks:
       - 9router-preview-net
       - 9router-prod-net  # Join prod network so caddy-test can be resolved by prod cloudflared
-    depends_on:
-      9router-api-test: { condition: service_healthy }
+    # NO depends_on 9router-api-test: `type=dashboard` deploys must not drag the API
+    # service in. Caddy resolves upstreams lazily; the workflow waits on health itself.
