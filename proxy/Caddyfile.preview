@@ -1,0 +1,17 @@
+http://9router-dashboard-test.vianhanif.link {
+    reverse_proxy 9router-test:20128 {
+        flush_interval -1
+    }
+    encode zstd gzip
+}
+
+http://9router-test.vianhanif.link {
+    reverse_proxy 9router-api-test:20127 {
+        flush_interval -1
+    }
+    encode zstd gzip
+}
+
+:80 {
+    respond "9router preview stack" 200
+}

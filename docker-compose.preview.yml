@@ -1,0 +1,116 @@
+# docker-compose.preview.yml
+# Isolated preview stack for testing non-master branches.
+# Usage:
+#   docker compose -f docker-compose.preview.yml -p 9router-preview up -d [--profile dashboard]
+#
+# Project name: 9router-preview (enforced via -p flag)
+# Networks: 9router-preview-net (own) + 9router_9router-net (external, joins prod network so caddy-test is reachable by prod cloudflared)
+# Hostnames: 9router-test.vianhanif.link, 9router-dashboard-test.vianhanif.link
+# Data: ./data-preview/9router (seeded from prod ./data/9router on first run, isolated thereafter)
+
+name: 9router-preview
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+    compress: "true"
+
+networks:
+  9router-preview-net:
+    driver: bridge
+  # Join prod network so caddy-test can be resolved by the existing cloudflared
+  9router-prod-net:
+    external: true
+    name: 9router_9router-net
+
+services:
+  9router-test:
+    build: ./src/9router
+    container_name: 9router-test
+    profiles: ["dashboard"]
+    restart: unless-stopped
+    logging: *default-logging
+    env_file: ./env/9router.env
+    environment:
+      DATA_DIR: /app/data
+      PORT: "20128"
+      HOSTNAME: 0.0.0.0
+      NODE_ENV: production
+      HEADROOM_URL: http://headroom-test:8787
+    volumes:
+      - ./data-preview/9router:/app/data
+      # NO data-home mount — production's ./data-home/9router-home is shared; preview
+      # mounting it read-write creates data-corruption risk. Preview works without it.
+    networks:
+      - 9router-preview-net
+    depends_on:
+      headroom-test: { condition: service_started }
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:20128/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  headroom-test:
+    build:
+      context: ./src/9router-api
+      dockerfile: Dockerfile
+    container_name: headroom-test
+    entrypoint: ["setpriv", "--reuid=node", "--regid=node", "--init-groups", "/opt/headroom-venv/bin/headroom"]
+    command: ["proxy", "--host", "0.0.0.0", "--port", "8787"]
+    restart: unless-stopped
+    logging: *default-logging
+    networks:
+      - 9router-preview-net
+    environment:
+      HOME: /home/node
+      HEADROOM_COMPRESS_ALLOW_REMOTE: "1"
+      HEADROOM_OUTPUT_SHAPER: "1"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  9router-api-test:
+    build:
+      context: ./src/9router-api
+      dockerfile: Dockerfile
+    container_name: 9router-api-test
+    restart: unless-stopped
+    logging: *default-logging
+    env_file: ./env/9router-api.env
+    environment:
+      PORT: "20127"
+      NODE_ENV: production
+      NINEROUTER_HOME: /app/9router
+      NPM_CONFIG_CACHE: /home/node/.npm
+    volumes:
+      - ./data-preview/9router:/app/data
+      # NO data-home mount — production's ./data-home/9router-home is shared; preview
+      # mounting it read-write creates data-corruption risk. Preview works without it.
+    networks:
+      - 9router-preview-net
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:20127/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  caddy-test:
+    image: caddy:alpine
+    container_name: caddy-test
+    restart: unless-stopped
+    logging: *default-logging
+    volumes:
+      - ./proxy/Caddyfile.preview:/etc/caddy/Caddyfile:ro
+    networks:
+      - 9router-preview-net
+      - 9router-prod-net  # Join prod network so caddy-test can be resolved by prod cloudflared
+    # NO depends_on 9router-api-test: `type=dashboard` deploys must not drag the API
+    # service in. Caddy resolves upstreams lazily; the workflow waits on health itself.
