@@ -177,6 +177,7 @@ jobs:
             docker compose -f docker-compose.preview.yml -p 9router-preview build \
               --build-arg NINEROUTER_VERSION=$NINEROUTER_SHA \
               --build-arg APIREPO_VERSION=$APIREPO_SHA \
+              $SERVICES
 
       - name: Start preview stack
         if: steps.resolve-type.outputs.action == 'deploy'
