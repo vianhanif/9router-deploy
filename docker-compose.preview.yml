@@ -41,7 +41,8 @@ services:
       HEADROOM_URL: http://headroom-test:8787
     volumes:
       - ./data-preview/9router:/app/data
-      - ./data-home/9router-home:/app/data-home
+      # NO data-home mount — production's ./data-home/9router-home is shared; preview
+      # mounting it read-write creates data-corruption risk. Preview works without it.
     networks:
       - 9router-preview-net
     depends_on:
@@ -90,7 +91,8 @@ services:
       NPM_CONFIG_CACHE: /home/node/.npm
     volumes:
       - ./data-preview/9router:/app/data
-      - ./data-home/9router-home:/app/data-home
+      # NO data-home mount — production's ./data-home/9router-home is shared; preview
+      # mounting it read-write creates data-corruption risk. Preview works without it.
     networks:
       - 9router-preview-net
     healthcheck:
