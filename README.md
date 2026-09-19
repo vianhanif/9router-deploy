@@ -181,6 +181,44 @@ The workflow `.github/workflows/deploy.yml` deploys on:
 4. **Switch** — recreates the stack with the new images (`--force-recreate`), then stops the profile-gated dashboard.
 5. **Prune** — removes `:prev` rollback images, dangling images, and build cache (only after a successful deploy).
 
+### Preview deployments (non-master branches)
+
+`.github/workflows/preview.yml` spins up an **isolated** stack so a branch can be tested on its own hostnames without touching production.
+
+| | Production | Preview |
+|---|---|---|
+| Compose project | `9router` | `9router-preview` |
+| Compose file | `docker-compose.yml` | `docker-compose.preview.yml` |
+| Caddyfile | `proxy/Caddyfile` | `proxy/Caddyfile.preview` |
+| Containers | `9router`, `9router-api`, `headroom`, `caddy` | `9router-test`, `9router-api-test`, `headroom-test`, `caddy-test` |
+| Data | `./data/9router` | `./data-preview/9router` |
+| Hostnames | `9router.vianhanif.link`, `9router-dashboard.vianhanif.link` | `9router-test.vianhanif.link`, `9router-dashboard-test.vianhanif.link` |
+
+**Triggers:** `workflow_dispatch` or `repository_dispatch` of type `preview`.
+
+**Inputs:**
+
+| Input | Values | Notes |
+|---|---|---|
+| `branch` | branch name or 40-char SHA | source for **both** 9router and 9router-api builds |
+| `type` | `select` \| `dashboard` \| `api` \| `both` | `select` + non-master is a hard failure; `select` + `master` resolves to `both` |
+| `action` | `deploy` \| `teardown` | teardown runs `docker compose ... down -v` |
+
+**Data seeding:** on the first deploy, `./data/9router` is copied to `./data-preview/9router` with `rsync`. The preview then owns its copy and never writes back to production data.
+
+**Networking:** `caddy-test` joins the production Docker network (`9router_9router-net`) as an external network so the already-running `cloudflared` can reach it, while the preview containers themselves stay on their own `9router-preview-net`.
+
+**Prerequisite — Cloudflare ingress (manual, one-time):** the tunnel is token-managed, so ingress rules live in the Cloudflare Zero Trust dashboard, not in this repo. Add two public hostnames pointing at the same origin service:
+
+```
+9router-test.vianhanif.link            ->  http://caddy-test:80
+9router-dashboard-test.vianhanif.link  ->  http://caddy-test:80
+```
+
+**No rollback:** a broken preview is torn down, not rolled back. The workflow has no `:prev` snapshot logic.
+
+**Concurrency:** the preview lock (`preview-9router-deploy`) is separate from the production lock (`deploy-9router`), so the two pipelines never block each other.
+
 ## Environment Variables
 
 ### 9router.env
