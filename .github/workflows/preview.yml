@@ -89,7 +89,15 @@ jobs:
             set -e
             cd /opt/9router
             echo "Tearing down preview stack..."
-            docker compose -f docker-compose.preview.yml -p 9router-preview down -v
+            if [ -f docker-compose.preview.yml ]; then
+              docker compose -f docker-compose.preview.yml -p 9router-preview down -v
+            else
+              # Config never synced (e.g. teardown before any deploy) — remove
+              # by container name instead so teardown stays idempotent.
+              echo "docker-compose.preview.yml not found — removing containers directly"
+              docker rm -f caddy-test 9router-test 9router-api-test headroom-test 2>/dev/null || true
+              docker network rm 9router-preview-net 2>/dev/null || true
+            fi
             echo "PREVIEW TEARDOWN OK"
 
       - name: Sync preview config
@@ -158,12 +166,12 @@ jobs:
 
             echo "Building preview: branch=$BRANCH ($NINEROUTER_SHA / $APIREPO_SHA), type=$TYPE"
 
-            SERVICES=""
+            SERVICES="headroom-test"
             if [[ "$TYPE" == "dashboard" || "$TYPE" == "both" ]]; then
               SERVICES="$SERVICES 9router-test"
             fi
             if [[ "$TYPE" == "api" || "$TYPE" == "both" ]]; then
-              SERVICES="$SERVICES 9router-api-test headroom-test"
+              SERVICES="$SERVICES 9router-api-test"
             fi
 
             docker compose -f docker-compose.preview.yml -p 9router-preview build \
@@ -191,10 +199,22 @@ jobs:
               PROFILE_ARG="--profile dashboard"
             fi
 
+            # Explicit service list — without it `up` would start every service
+            # in the file regardless of `type`. headroom-test is always included
+            # because 9router-test depends_on it (same coupling as production).
+            SERVICES="caddy-test headroom-test"
+            if [[ "$TYPE" == "dashboard" || "$TYPE" == "both" ]]; then
+              SERVICES="$SERVICES 9router-test"
+            fi
+            if [[ "$TYPE" == "api" || "$TYPE" == "both" ]]; then
+              SERVICES="$SERVICES 9router-api-test"
+            fi
+
             # Isolated project name keeps prod's `--remove-orphans` from reaping us
             docker compose -f docker-compose.preview.yml -p 9router-preview up -d \
               $PROFILE_ARG \
-              --force-recreate
+              --force-recreate \
+              $SERVICES
 
             echo
             echo "Preview container status:"
