@@ -138,7 +138,7 @@ jobs:
           host: ${{ secrets.TENCENT_HOST }}
           username: ${{ secrets.TENCENT_USER }}
           key: ${{ secrets.TENCENT_SSH_KEY }}
-          command_timeout: 30m
+          command_timeout: 15m
           script: |
             set -e
             cd /opt/9router
