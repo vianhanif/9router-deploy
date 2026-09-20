@@ -2,9 +2,10 @@
 
 - **Date:** 2026-09-20
 - **Ticket:** OFFLINE
-- **Status:** Planned
+- **Status:** Planned — all 7 open questions resolved (see Resolutions). **Documentation only: no code, no workflow changes in this PR.**
+- **Revision:** R2 (2026-09-20) — records resolutions of the 7 open questions (evidence-verified)
 - **Base commit:** `41f3db5` (`master`)
-- **Branch suggestion:** `feature/offline-ghcr-build`
+- **Branch:** `feature/offline-ghcr-build` (draft PR #8)
 
 ## Task Overview
 
@@ -21,13 +22,13 @@
 ## Assumptions
 
 1. **"Offline" = built OFF the VPS (out-of-band), NOT an air-gapped/isolated build.** No internet-disconnected environment is involved; builds happen on GitHub-hosted runners. The word "offline" only contrasts with today's on-box build. Anyone reading "offline" as "no network" is misreading the ticket.
-2. **VPS CPU architecture is `linux/amd64`.** No arch evidence exists anywhere in the repo (searched all compose/workflow/README/Dockerfile/cloudflared files for `uname`, `aarch64`, `arm64`, `amd64`, `x86_64`, `--platform`, `TARGETARCH` — zero hits; `git log` arch grep: only unrelated README commit). `ubuntu-latest` runners are amd64. **If the VPS is arm64 this plan is wrong — see Open Question 1 (blocking).**
+2. **VPS CPU architecture is `linux/amd64` — RESOLVED (match).** VPS `uname -m` = `x86_64`; docker server platform `linux/amd64`; `ubuntu-latest` runner is x86_64. Architectures match: **no QEMU, no `--platform` override, no arm64 runner.** (`headroom-ai==0.37.0` publishes both `..._manylinux_2_28_aarch64.whl` and `..._manylinux_2_28_x86_64.whl`, so the `--only-binary :all:` install at `src/9router-api/Dockerfile:49` is not an arch blocker either way — detail in Resolutions Q1.)
 3. **GHCR images live in this repo's own namespace** `ghcr.io/vianhanif/9router-deploy/*`. The deploy repo's `GITHUB_TOKEN` can push there (with `packages: write`); a token from this repo cannot push to another repo's namespace.
-4. **Source repos `vianhanif/9router` and `vianhanif/9router-api` are reachable unauthenticated.** `deploy.yml:72/81` run `git ls-remote https://github.com/vianhanif/9router.git` with no token and CI works; the Dockerfiles fetch the same way (`src/9router/Dockerfile:12-16`, `src/9router-api/Dockerfile:10-14,26-30`) without auth. If those repos are private, today's CI would already fail — strong evidence they are public. (Unverified whether the VPS has a credential helper; the runner will hit GitHub fresh.)
+4. **Source repos `vianhanif/9router` and `vianhanif/9router-api` are public — RESOLVED (repo owner confirmed).** `deploy.yml:72/81` run `git ls-remote https://github.com/vianhanif/9router.git` unauthenticated today; the Dockerfiles fetch the same way (`src/9router/Dockerfile:12-16`, `src/9router-api/Dockerfile:10-14,26-30`) with no token. No token needed for the Dockerfiles' git fetch.
 5. **No build-time secrets exist.** The only build args are resolved public SHAs (`deploy.yml:85-88`); Dockerfile `ARG`s are repo URLs + version refs (`src/9router/Dockerfile:6-7`, `src/9router-api/Dockerfile:5-6,21-22`), no `--mount=type=secret`, no build-time login. Nothing needs to move to GitHub Secrets for the build itself.
 6. VPS runs Docker Compose v2 (all workflows use `docker compose`).
 7. Prod image set maps 1:1 to GHCR refs: `9router`, `9router-api`, `headroom`.
-8. GHCR packages will be **public** unless the user decides otherwise (see Open Question 2 — default private breaks anonymous VPS pull).
+8. **GHCR packages will be public — RESOLVED.** Public packages allow anonymous pull (VPS needs zero registry credentials) and are free (no quota). See Resolutions Q2.
 
 ## Impact Scope
 
@@ -37,15 +38,16 @@
 | 2 | `docker-compose.yml` — `image:` refs replace `build:` | 9router-deploy | Med |
 | 3 | `docker-compose.local.yml` — add `build:` back for local dev | 9router-deploy | Low |
 | 4 | `README.md` — CI/CD + architecture doc refresh | 9router-deploy | Low |
-| 5 | Manual ops (no repo): VPS `uname -m` check, GHCR visibility decision, optional VPS `docker login`, first rollout | VPS | Med |
+| 5 | Manual ops (no repo): first rollout (arch + visibility resolved — see Resolutions) | VPS | Low |
 | 6 | `preview.yml` + `docker-compose.preview.yml` | 9router-deploy | **Untouched — out of scope** |
 
 ## Change Approach
 
-### Step 0 — Blocking preflight (user/ops, before coding)
+### Step 0 — Preflight (RESOLVED — see Resolutions)
 
-1. **Confirm VPS arch** (`uname -m`). amd64 → proceed. aarch64 → STOP and re-plan (Open Question 1).
-2. **Choose GHCR package visibility.** Public → anonymous `docker compose pull` on VPS, zero credentials to manage. Private → VPS needs `docker login ghcr.io` with a `read:packages` PAT; that credential lives in the VPS user's docker config (written by `docker login`), not in this repo (env files are gitignored, `env/*.env`; the deploy workflow only syncs compose/Caddyfile/Dockerfiles, `deploy.yml:42`). Do not invent secret values; this is a user decision.
+1. **VPS arch confirmed `x86_64`** (`uname -m`; docker server platform `linux/amd64`). Matches the `ubuntu-latest` x86_64 runner → no cross-build. (Q1)
+2. **GHCR visibility decided: PUBLIC.** Anonymous `docker compose pull` on the VPS, zero credentials to manage. (Q2)
+3. **Precondition before the FIRST push:** audit that no secret/token is baked into an image layer via build ARG or a copied env file — required because packages will be public. (Q2)
 
 ### Step 1 — `deploy.yml` restructure (High)
 
@@ -56,7 +58,13 @@ Single job retained; steps re-ordered around a runner-side build stage, then SSH
 
 **Kept, relocated onto the runner (new steps):**
 - SHA resolution as a plain `run:` step with `GITHUB_OUTPUT` outputs, preserving dispatch-default behavior: `INPUT_NINEROUTER/INPUT_API` fall back to `master` when `github.event.inputs` is empty (`56-60` semantics — `repository_dispatch` delivers no `inputs`, so the fallback matters).
-- `permissions: contents: read, packages: write` on the job (GHCR push). GHA cache save may additionally require `actions: write` — Open Question 4.
+- **Add the job `permissions:` block (REQUIRED — verified gap, not a maybe).** Repo default workflow-token permission is `read` (`default_workflow_permissions: "read"`, verified via API); grep found no `permissions:` block in `deploy.yml`/`preview.yml`, so GHCR push and `cache-to: type=gha` would 403 without it (Q4):
+  ```yaml
+  permissions:
+    contents: read
+    packages: write      # GHCR push via GITHUB_TOKEN
+    actions: write       # Actions cache API, only needed if cache-to: type=gha is used
+  ```
 - `docker/setup-buildx-action@v3`, then `docker/build-push-action@v6` with `username: ${{ github.actor }}`, `password: ${{ secrets.GITHUB_TOKEN }}`:
   - **9router:** context `src/9router`, build-arg `NINEROUTER_VERSION=$NINEROUTER_SHA`, tags `ghcr.io/vianhanif/9router-deploy/9router:sha-${NINEROUTER_SHA}` **and** `:latest`, `push: true`, `cache-from: type=gha`, `cache-to: type=gha,mode=max`.
   - **9router-api + headroom:** **build once, tag 4 refs** — `docker-compose.yml:41-44` and `62-65` build the *same* `./src/9router-api` Dockerfile; `headroom` differs only by compose-level entrypoint/command (`46-47` vs `131-132`). buildx multi-tag: `.../9router-api:sha`, `.../9router-api:latest`, `.../headroom:sha`, `.../headroom:latest`. Halves build time vs today's two identical VPS builds. (Revisit if the Dockerfile splits — Open Question 6.)
@@ -65,7 +73,7 @@ Single job retained; steps re-ordered around a runner-side build stage, then SSH
 - "Sync deploy config" (`36-43`): **keep scp as-is** — the two Dockerfiles are unused by prod now but zero-cost and serve the manual-rebuild fallback; preview re-syncs its own copy (`preview.yml:136`). Minimal diff.
 - "Switch to new images & verify" (`176-191`): prepend before `up -d`:
   - `docker tag ghcr.io/vianhanif/9router-deploy/9router:latest .../9router:prev` (+ api, headroom) — **before** pull, preserving today's local-retag rollback.
-  - `docker compose pull` — for the profile-gated dashboard service (`docker-compose.yml:18`), use `docker compose --profile dashboard pull 9router 9router-api headroom` (Risk 7).
+  - `docker compose --profile dashboard pull 9router 9router-api headroom` — the resolved invocation form (Q7).
   - then unchanged `up -d --remove-orphans --force-recreate` (`189-191`).
 - Smoke test (`90-174`): image refs → GHCR refs — `9router-headroom:latest` (`119`), `9router-9router:latest` (`129`), `9router-9router-api:latest` (`148`). Miss one and the smoke test silently tests the previous image.
 - Prune (`245-262`):
@@ -100,10 +108,10 @@ Update architecture flow (`README.md:5-35`), infra layout (`43-54` — Dockerfil
 
 ### Step 5 — Manual rollout (ops, after merge, NOT in this PR)
 
-1. `uname -m` on VPS — gate for the whole plan.
-2. Visibility decision; if private: create PAT `read:packages`, `docker login ghcr.io` as the user appleboy logs in as (`TENCENT_USER`, `deploy.yml:40`).
-3. First deploy post-merge: verify `docker compose pull` fetches 3 images, `up -d --force-recreate` succeeds, smoke hits GHCR images, `docker image ls` shows ghcr refs, `/opt/9router` builder cache untouched, preview still builds on VPS.
-4. Ops routine: GHCR sha-tag retention (Risk 4).
+1. Audit that no secret/token is baked into an image layer — required before the first push because packages will be public (Q2 precondition).
+2. First deploy post-merge: verify `docker compose pull` fetches 3 images, `up -d --force-recreate` succeeds, smoke hits GHCR images, `docker image ls` shows ghcr refs, `/opt/9router` builder cache untouched, preview still builds on VPS.
+3. After first push: check package visibility in the GitHub Packages UI, flip to public before the first deploy (Risk 3).
+4. Ops routine: GHCR sha-tag retention (the scheduled workflow from Q5).
 
 ### Step 6 — Fallback decision: delete the on-VPS prod build path (YAGNI justified)
 
@@ -115,28 +123,61 @@ Do NOT keep a dual build path. Reasons:
 
 ## Risks & Side Effects
 
-1. **Architecture mismatch (blocking).** amd64 images on an arm64 VPS = `exec format error` crash loops on every service. Verify `uname -m` before merge. If arm64: `--platform linux/arm64` via QEMU on amd64 runners (much slower; the manylinux `headroom-ai==0.37.0` wheel at `src/9router-api/Dockerfile:49` may lack aarch64 builds — unverified) or an arm64 self-hosted runner — material cost/benefit change.
-2. **GHCR auth drift on VPS (private packages only).** PAT expiry → pull 401 → deploy gate aborts (prod untouched, rollback no-op). Mitigation: fail-fast + documented refresh. Public packages delete this risk class.
-3. **Visibility misconfig.** GHCR defaults packages to private; a "public" plan with default settings 401s at VPS pull *after* a successful runner push. The failing step must log pull/auth vs image-content distinctly.
-4. **GHCR storage/quota.** Every deploy adds sha tags (3 refs, incl. duplicate-content headroom). Private packages count against GHCR free storage (exact current limits unverified); public packages don't. `type=gha` cache keeps cache layers out of the registry (avoids `type=registry` doubling storage). Mitigation: ops routine deleting old sha tags, keeping `latest` + `prev`.
-5. **Cache effectiveness.** `NINEROUTER_VERSION` busts the git-clone layer per deploy (by design, `src/9router/Dockerfile:10-12`); `npm install` layer hits while `package.json` is unchanged; the Next/esbuild build layer always re-runs. `type=gha` stores cache in the Actions cache service (per-repo 10GB free tier) — no registry bloat; eviction to verify (Open Questions 4-5).
+1. **Architecture mismatch — RETIRED (Q1).** VPS is `x86_64`/`linux/amd64`, matching the x86_64 `ubuntu-latest` runner: no cross-build, no QEMU, no `--platform linux/arm64` override. This risk class no longer exists.
+2. **GHCR auth drift on VPS — RETIRED (Q2).** Public packages allow anonymous pull; no PAT, no `docker login`, no credential lifecycle. This risk class no longer exists.
+3. **Visibility misconfig.** GHCR defaults packages to private; public is set after the first push, so a "public" plan with default settings 401s at VPS pull *after* a successful runner push. Mitigation: check package visibility in the GitHub Packages UI after the first push, flip to public before the first deploy. Log pull/auth vs image-content errors distinctly.
+4. **GHCR storage/quota.** Every deploy adds sha tags (3 refs, incl. duplicate-content headroom). PUBLIC packages are free (no quota) — the measured private-package math is exactly what forced the public decision (Q2). `type=gha` cache keeps cache layers out of the registry (avoids `type=registry` doubling storage). Mitigation: the sha-tag cleanup cadence in "GHCR sha-tag retention policy" (Q5).
+5. **Cache effectiveness.** `NINEROUTER_VERSION` busts the git-clone layer per deploy (by design, `src/9router/Dockerfile:10-12`); `npm install` layer hits while `package.json` is unchanged; the Next/esbuild build layer always re-runs. `type=gha` stores cache in the Actions cache service (per-repo 10GB free tier) — no registry bloat; eviction still to verify (Q4 permissions resolved, Q5 retention cadence resolved).
 6. **Smoke-ref drift.** Hardcoded local image refs across smoke (`119,129,148`), prune (`253`) and rollback (`283,289`) must all move to GHCR names in one change; any miss = smoke testing the stale image or pruning nothing.
-7. **`compose pull` profile trap.** `9router` is profile-gated (`docker-compose.yml:18`); a bare `docker compose pull` may skip it and let `up` implicitly pull (or fail). Use `--profile dashboard` explicitly.
+7. **`compose pull` profile trap.** `9router` is profile-gated (`docker-compose.yml:18`); a bare `docker compose pull` may skip it. **Chosen form (Q7):** `docker compose --profile dashboard pull 9router 9router-api headroom` — implementation must verify this behaves as intended vs letting `up -d` re-pull.
 8. **Preview constraints only partly lifted.** Runner-side prod builds remove the concurrent-build OOM half of `791769f`'s rationale; the cloudflared-recreate-vs-edge-verify race survives (assessment below).
 
 ## Preview push-trigger assessment (commit `791769f`)
 
 `791769f:3-6` cites two reasons preview stays dispatch-only: (a) concurrent prod+preview builds on the 1.7GB VPS (OOM), (b) a race between a prod deploy recreating cloudflared and the preview edge verify that rides prod cloudflared. Runner-side prod builds **remove (a)** — prod never builds on the VPS; preview's own build (`preview.yml:203`) then runs alone. **But (b) remains**: the concurrency groups are disjoint (`preview-9router-deploy`, `preview.yml:35` vs `deploy-9router`, `deploy.yml:26`), so a push trigger would still run preview + prod switches concurrently — both force-recreate members of the shared network (`docker-compose.preview.yml:24-26`) and both verify through the same prod cloudflared. Offloading builds is **necessary but not sufficient** for a push trigger; that change would additionally need a cross-workflow lock, a verify path independent of prod cloudflared, or a preview build memory cap. **Not changed in this PR** (scope).
 
-## Unverified / Open Questions (blocking — need user/VPS input)
+## GHCR sha-tag retention policy
 
-1. **VPS CPU architecture.** Zero repo evidence; plan assumes amd64. Run `uname -m` on the VPS before implementation. If aarch64: replan around QEMU cross-build or an arm64 runner.
-2. **GHCR package visibility (public vs private) — user decision.** If private: where the VPS credential lives and which OS user's docker config receives `docker login` (appleboy SSH runs as `TENCENT_USER`, not necessarily root).
-3. **Are `vianhanif/9router` / `vianhanif/9router-api` private?** Runner-side builds hit github.com from a fresh VM; if private, the Dockerfile `git fetch` needs a token the runner does not currently have (same-org `GITHUB_TOKEN` or PAT). Evidence says public; confirm.
-4. **GH Actions cache write permission.** Whether `actions: write` is required for `cache-to: type=gha` on this repo (known 403 gotcha) — verify at implementation.
-5. **GHCR storage limits + sha-tag retention policy.** Decide cleanup cadence; confirm whether public packages are exempt from the storage quota.
-6. **Single image for headroom + 9router-api** (same Dockerfile/context, `docker-compose.yml:41-44,62-65`) — confirm acceptable long-term (entrypoint/command differ only in compose). If the Dockerfile ever splits, revisit.
-7. **Exact `docker compose --profile dashboard pull <services>` behavior** and whether `up -d` re-pulls implicitly — verify at implementation (Risk 7).
+**Policy (Q5 resolution):** retain `:latest` and `:prev`; sha/digest tags are audit-only (referenced in plan text/deploy logs, not retained long-term). Retention is a housekeeping/storage concern only — correctness never depends on sha tags existing, because rollback uses the local `:prev` tag and is registry-free.
+
+**Mechanism:** a small scheduled workflow (`.github/workflows/cleanup-ghcr-tags.yml`, tentative name) that runs monthly (`schedule: cron`) + on-demand (`workflow_dispatch`). Deletes sha tags older than 7 days while explicitly preserving `:latest`, `:prev`, and any `pr-*` tags. Implementation detail: use the GitHub Packages API (`GET /orgs/{org}/packages/{package_type}/{package_name}/versions`, `DELETE /orgs/{org}/packages/{package_type}/{package_name}/versions/{version_id}`) with `GITHUB_TOKEN` (requires `packages: write`). Scope 3 packages: `9router`, `9router-api`, `headroom`.
+
+## Resolutions (all 7 open questions RESOLVED, evidence-verified)
+
+**Q1 — VPS CPU arch:** x86_64 (RESOLVED — match).
+- VPS `uname -m` = `x86_64`; `docker info` platform = `linux/amd64`. GitHub Actions `ubuntu-latest` runner is x86_64. Architectures **match** → no QEMU, no `--platform` override, no arm64 runner. **Arch risk removed** from the plan — no longer a blocker or mitigation case.
+- Corroborating detail: `headroom-ai==0.37.0` on PyPI publishes `headroom_ai-0.37.0-cp310-abi3-manylinux_2_28_aarch64.whl` AND `..._manylinux_2_28_x86_64.whl`. The `--only-binary :all:` install at `src/9router-api/Dockerfile:49` would have a wheel for both archs, so that constraint is not an arch blocker either way. Full validation of the on-VPS OOM premise: VPS RAM 1.7Gi total, 564Mi available; VPS disk `/dev/vda2` 40G, 23G used, 16G free (60%). Measured image sizes: `9router-9router:latest` 750MB; `9router-9router-api:latest` 2.2GB; `9router-headroom:latest` 2.2GB (same image as 9router-api). ~5.15GB per prod image set; `:prev` is a re-tag, not a copy, so no disk-use doubling.
+
+**Q2 — GHCR visibility:** PUBLIC (RESOLVED).
+- Rationale: (a) source repos `vianhanif/9router` and `vianhanif/9router-api` are public (Q3); (b) public packages allow anonymous pull → VPS needs zero registry credentials (no PAT, no `docker login`, no `~/.docker/config.json` write); (c) GitHub Packages usage is free for public packages; (d) **DECISIVE quantitative reason:** private packages bill against the plan's included quota (GitHub Free ~500MB storage / 1GB transfer per month; GitHub Team = 2GB storage per GitHub docs), while the measured images are 750MB + 2.2GB + 2.2GB. The 2.2GB image alone exceeds the Free storage allowance roughly 4×, so private is effectively blocked-or-billed from the first push.
+- Consequences: VPS deploy step needs no auth; one fewer credential lifecycle to rotate; visibility remains reversible (package can be flipped public→private later).
+- **Precondition (gate before the FIRST push):** audit that no secret/token is baked into an image layer via build ARG or a copied env file. Marginal disclosure is otherwise low because the images are built FROM already-public source.
+
+**Q3 — Source repo visibility:** both public (RESOLVED, repo owner confirmed).
+- `vianhanif/9router` and `vianhanif/9router-api` are public. Consistent with the fact that `git ls-remote https://github.com/vianhanif/9router.git` in `deploy.yml` works unauthenticated today. No token needed for the Dockerfiles' git fetch.
+
+**Q4 — GitHub Actions permissions:** a required change (RESOLVED — verified gap, not a maybe).
+- Verified via API: repo default workflow-token permission is `read` (`default_workflow_permissions: "read"`). Grep found NO `permissions:` block in `.github/workflows/deploy.yml` or `.github/workflows/preview.yml`. Therefore GHCR push would 403, and `cache-to: type=gha` would 403, unless `deploy.yml` gains an explicit block.
+- **Required change — the single highest-confidence implementation gap found:**
+  ```yaml
+  permissions:
+    contents: read
+    packages: write      # GHCR push via GITHUB_TOKEN
+    actions: write       # Actions cache API, only needed if cache-to: type=gha is used
+  ```
+
+**Q5 — GHCR sha-tag retention:** cleanup cadence (RESOLVED).
+- Policy: retain `:latest` and `:prev`; sha/digest tags are AUDIT-ONLY (referenced in plan text/deploy logs, not retained long-term).
+- Mechanism: a small scheduled workflow (`schedule:` monthly + `workflow_dispatch`) that deletes sha tags older than 7 days while explicitly preserving `:latest`, `:prev`, and any `pr-*` tags.
+- Note: retention is a housekeeping/storage concern only; correctness never depends on sha tags existing, because rollback uses the local `:prev` tag and is registry-free.
+
+**Q6 — Single image covering 9router-api + headroom:** proceed (RESOLVED).
+- One image, multi-tagged, is accepted as the long-term shape. Revisit only if the Dockerfile is deliberately split later.
+- Supporting detail: `docker-compose.yml:41-44` and `62-65` build the same Dockerfile/context and differ only in entrypoint/command.
+
+**Q7 — Pull invocation:** explicit service list + profile (RESOLVED).
+- Chosen form: `docker compose --profile dashboard pull 9router 9router-api headroom`.
+- Record as an implementation-verification item (NOT a plan blocker): confirm this behaves as intended vs letting `up -d` re-pull; verify during implementation.
 
 ## Out of Scope
 
