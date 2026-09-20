@@ -242,25 +242,6 @@ jobs:
             echo
             echo "DEPLOY OK"
 
-      - name: Prune old images & build cache
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.TENCENT_HOST }}
-          username: ${{ secrets.TENCENT_USER }}
-          key: ${{ secrets.TENCENT_SSH_KEY }}
-          script: |
-            # Scoped to this project's own image refs — safe on a shared daemon.
-            docker rmi 9router-9router:prev 9router-9router-api:prev 9router-headroom:prev 2>/dev/null || true
-            # Scope image cleanup to the 9router compose project (label filter)
-            # with a 24h age floor, so the co-located opencode-sandbox stack's
-            # fresh dangling layers/cache are never collected from here.
-            docker image prune -f \
-              --filter "label=com.docker.compose.project=9router" \
-              --filter "until=24h"
-            # NEVER `docker builder prune -af` on a shared VPS: it evicts the
-            # BuildKit cache of every project on the daemon. Age-bound it.
-            docker builder prune -f --filter "until=72h"
-
       - name: Rollback on failure (any prior step failed)
         if: failure()
         uses: appleboy/ssh-action@v1.0.3
@@ -303,3 +284,29 @@ jobs:
             else
               echo "Production already on previous images; nothing to roll back."
             fi
+
+      - name: Prune old images & build cache
+        # Runs even when a deploy step failed — the default `if: success()` skipped
+        # this exactly when dangling images accumulated (root cause of the 9.6 GB
+        # image leak). Must stay AFTER the rollback step: rollback reads `:prev`
+        # tags, and this step deletes them.
+        if: ${{ !cancelled() }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.TENCENT_HOST }}
+          username: ${{ secrets.TENCENT_USER }}
+          key: ${{ secrets.TENCENT_SSH_KEY }}
+          script: |
+            # Scoped to this project's own image refs — safe on a shared daemon.
+            docker rmi 9router-9router:prev 9router-9router-api:prev 9router-headroom:prev 2>/dev/null || true
+            # Project label scoping keeps co-located stacks (opencode-sandbox) on
+            # this shared daemon safe. No `until=24h` floor: freshly built images
+            # are <24h old, so the age filter matched nothing and this step
+            # reclaimed ~0 bytes on every run (root cause of the dangling leak).
+            docker image prune -f \
+              --filter "label=com.docker.compose.project=9router"
+            # NEVER `docker builder prune -af` on a shared VPS: it evicts the
+            # BuildKit cache of every project on the daemon. Age-bound it.
+            # 72h floor kept deliberately: a tighter floor forces cold rebuilds,
+            # and the build step is the OOM-riskiest on the 1.7GB VPS.
+            docker builder prune -f --filter "until=72h"

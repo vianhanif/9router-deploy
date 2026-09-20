@@ -92,6 +92,12 @@ jobs:
             for net in $(docker network ls -q --filter "label=com.docker.compose.project=9router-preview"); do
               docker network rm "$net" 2>/dev/null || true
             done
+            # Remove compose-built preview images too — `down` never untags them,
+            # and they accumulated ~5 GB across preview cycles.
+            for img in $(docker image ls -q --filter "reference=9router-preview-*"); do
+              echo "Removing preview image $img"
+              docker image rm -f "$img"
+            done
             echo "Preview teardown complete"
 
       - name: Teardown preview (explicit)
@@ -123,6 +129,12 @@ jobs:
             done
             for net in $(docker network ls -q --filter "label=com.docker.compose.project=9router-preview"); do
               docker network rm "$net" 2>/dev/null || true
+            done
+            # Remove compose-built preview images — `down` never untags them,
+            # and they accumulated ~5 GB across preview cycles.
+            for img in $(docker image ls -q --filter "reference=9router-preview-*"); do
+              echo "Removing preview image $img"
+              docker image rm -f "$img"
             done
             echo "PREVIEW TEARDOWN OK"
 
