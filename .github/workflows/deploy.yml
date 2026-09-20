@@ -309,8 +309,9 @@ jobs:
             # BuildKit cache of every project on the daemon.
             # 72h age floor kept deliberately: a tighter floor forces cold
             # rebuilds, and the build step is the OOM-riskiest on the 1.7GB VPS.
-            # `--keep-storage 3G` adds a hard size ceiling — the 72h floor alone
-            # let the cache drift to ~6GB (measured on the VPS), all of it
+            # `--max-used-space 3G` enforces a hard size ceiling — the 72h floor
+            # alone let the cache drift to ~6GB (measured on the VPS), all
             # reclaimable but sitting on a 40GB disk. 3G holds a couple of
             # recent builds hot, so deploys stay warm without cold-rebuild OOM.
-            docker builder prune -f --filter "until=72h" --keep-storage 3G
+            # (Was `--keep-storage`; deprecated in Docker CLI 27.5.1, same semantics.)
+            docker builder prune -f --filter "until=72h" --max-used-space 3G
