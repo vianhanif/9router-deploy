@@ -211,9 +211,11 @@ jobs:
               SERVICES="$SERVICES 9router-api-test"
             fi
 
-            # Isolated project name keeps prod's `--remove-orphans` from reaping us
-            docker compose -f docker-compose.preview.yml -p 9router-preview up -d \
+            # Isolated project name keeps prod's `--remove-orphans` from reaping us.
+            # `--profile` is a compose top-level flag — it must precede the subcommand.
+            docker compose -f docker-compose.preview.yml -p 9router-preview \
               $PROFILE_ARG \
+              up -d \
               --force-recreate \
               $SERVICES
 
