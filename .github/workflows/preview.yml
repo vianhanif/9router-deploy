@@ -1,5 +1,9 @@
 name: preview
 
+# Intentionally dispatch-only (no push trigger). A push to master already runs
+# deploy.yml; adding one here would build preview + prod concurrently on the
+# 1.7GB VPS (OOM risk) and race cloudflared recreation mid-verify.
+# Revisit only after a VPS RAM upgrade or a build memory cap is in place.
 on:
   workflow_dispatch:
     inputs:
