@@ -79,7 +79,19 @@ jobs:
             set -e
             cd /opt/9router
             echo "Tearing down existing preview stack (if any)..."
-            docker compose -f docker-compose.preview.yml -p 9router-preview down -v 2>/dev/null || true
+            # Do NOT hide stderr or swallow the exit code here: `down -v 2>/dev/null || true`
+            # masked a partial teardown that left an orphan container running, pinning its
+            # image and the preview network on the 1.7GB VPS. `down` also skips orphans, so
+            # sweep by compose project label afterwards.
+            docker compose -f docker-compose.preview.yml -p 9router-preview down -v --remove-orphans \
+              || echo "WARN: compose down reported an error; sweeping leftovers below"
+            for cid in $(docker ps -aq --filter "label=com.docker.compose.project=9router-preview"); do
+              echo "Removing leftover preview container $cid"
+              docker rm -f "$cid"
+            done
+            for net in $(docker network ls -q --filter "label=com.docker.compose.project=9router-preview"); do
+              docker network rm "$net" 2>/dev/null || true
+            done
             echo "Preview teardown complete"
 
       - name: Teardown preview (explicit)
@@ -94,7 +106,7 @@ jobs:
             cd /opt/9router
             echo "Tearing down preview stack..."
             if [ -f docker-compose.preview.yml ]; then
-              docker compose -f docker-compose.preview.yml -p 9router-preview down -v
+              docker compose -f docker-compose.preview.yml -p 9router-preview down -v --remove-orphans
             else
               # Config never synced (e.g. teardown before any deploy) — remove
               # by container name instead so teardown stays idempotent.
@@ -102,6 +114,16 @@ jobs:
               docker rm -f caddy-test 9router-test 9router-api-test headroom-test 2>/dev/null || true
               docker network rm 9router-preview-net 2>/dev/null || true
             fi
+            # `down` still skips orphans (containers in the project whose service is
+            # absent from the current compose file), and the network survives with them.
+            # Sweep by project label so teardown is genuinely idempotent.
+            for cid in $(docker ps -aq --filter "label=com.docker.compose.project=9router-preview"); do
+              echo "Removing leftover preview container $cid"
+              docker rm -f "$cid"
+            done
+            for net in $(docker network ls -q --filter "label=com.docker.compose.project=9router-preview"); do
+              docker network rm "$net" 2>/dev/null || true
+            done
             echo "PREVIEW TEARDOWN OK"
 
       - name: Sync preview config
