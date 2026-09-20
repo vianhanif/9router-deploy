@@ -301,25 +301,40 @@ jobs:
 
             echo "Verifying preview through Cloudflare edge..."
 
+            # Retry: tolerates CF propagation + tunnel restart race. Pushes to master
+            # also trigger deploy.yml, which recreates cloudflared and briefly 530s the edge.
+            curl_retry() {
+              local url="$1" max=5
+              for i in $(seq 1 $max); do
+                if curl -fsS "$url" >/dev/null 2>&1; then
+                  return 0
+                fi
+                if [ "$i" -lt "$max" ]; then
+                  echo "  attempt $i/$max failed; retry in $((i*2))s..."
+                  sleep $((i*2))
+                fi
+              done
+              echo "  all retries exhausted"
+              return 1
+            }
+
             if [[ "$TYPE" == "api" || "$TYPE" == "both" ]]; then
               echo "Testing https://9router-test.vianhanif.link/api/health"
-              curl -fsS https://9router-test.vianhanif.link/api/health >/dev/null || {
+              curl_retry https://9router-test.vianhanif.link/api/health || {
                 echo "ERROR: 9router-test.vianhanif.link/api/health failed via CF edge"
                 exit 1
               }
-              echo "✓ API reachable via CF edge"
+              echo "API reachable via CF edge"
             fi
 
             if [[ "$TYPE" == "dashboard" || "$TYPE" == "both" ]]; then
               echo "Testing https://9router-dashboard-test.vianhanif.link/api/health"
-              curl -fsS https://9router-dashboard-test.vianhanif.link/api/health >/dev/null || {
+              curl_retry https://9router-dashboard-test.vianhanif.link/api/health || {
                 echo "ERROR: 9router-dashboard-test.vianhanif.link/api/health failed via CF edge"
                 exit 1
               }
-              echo "✓ Dashboard reachable via CF edge"
+              echo "Dashboard reachable via CF edge"
             fi
 
             echo
             echo "EDGE VERIFICATION OK"
-
-              $SERVICES
