@@ -3,6 +3,12 @@ name: deploy
 on:
   push:
     branches: [ master ]
+    paths:
+      - 'docker-compose.yml'
+      - 'proxy/Caddyfile'
+      - 'src/**'
+      - 'cloudflared/**'
+      - '.github/workflows/deploy.yml'
   workflow_dispatch:
     inputs:
       ninerouter_branch:
