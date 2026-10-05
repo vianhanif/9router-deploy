@@ -61,7 +61,6 @@ jobs:
 
             docker tag 9router-9router:latest 9router-9router:prev 2>/dev/null || true
             docker tag 9router-9router-api:latest 9router-9router-api:prev 2>/dev/null || true
-            docker tag 9router-headroom:latest 9router-headroom:prev 2>/dev/null || true
 
             resolve_sha() {
               local ref="$1" repo="$2" sha
@@ -85,7 +84,7 @@ jobs:
             docker compose build \
               --build-arg NINEROUTER_VERSION=$NINEROUTER_SHA \
               --build-arg APIREPO_VERSION=$APIREPO_SHA \
-              9router 9router-api headroom
+              9router 9router-api
 
       - name: Smoke test new images
         uses: appleboy/ssh-action@v1.0.3
@@ -106,24 +105,17 @@ jobs:
 
             cleanup() {
               echo "Cleaning up smoke test containers..."
-              docker rm -f smoke-9router smoke-api smoke-headroom >/dev/null 2>&1 || true
+              docker rm -f smoke-9router smoke-api >/dev/null 2>&1 || true
             }
             trap cleanup EXIT
 
             echo "Starting isolated stack for smoke validation..."
 
-            # 1. Start headroom dependency. Use a UNIQUE alias — reusing the live
-            #    `headroom` alias on the shared network would let Docker DNS route
-            #    production traffic to this throwaway container.
-            docker run -d --name smoke-headroom --network 9router_9router-net --network-alias smoke-headroom \
-              --entrypoint "setpriv" 9router-headroom:latest \
-              --reuid=node --regid=node --init-groups /opt/headroom-venv/bin/headroom proxy --host 0.0.0.0 --port 8787
-
-            # 2. Start Dashboard with exact configuration parameters.
+            # 1. Start Dashboard with exact configuration parameters.
             #    Ports bind to 127.0.0.1 only so the throwaway instance is never
             #    exposed on the VPS public interface.
             docker run -d --name smoke-9router --network 9router_9router-net \
-              --env-file ./env/9router.env -e PORT=20328 -e HEADROOM_URL=http://smoke-headroom:8787 \
+              --env-file ./env/9router.env -e PORT=20328 \
               -p 127.0.0.1:20328:20328 \
               -v /opt/9router/data/9router:/app/data -v /opt/9router/data-home/9router-home:/app/data-home \
               9router-9router:latest
@@ -255,13 +247,13 @@ jobs:
             cd /opt/9router
             echo "Deployment failed — restoring previous images and cleaning up smoke containers..."
             # 1. Remove smoke containers that the workflow may have left behind
-            docker rm -f smoke-9router smoke-api smoke-headroom >/dev/null 2>&1 || true
+            docker rm -f smoke-9router smoke-api >/dev/null 2>&1 || true
             # 2. Restore previous images (if any) so production keeps running.
             #    Only recreate when :latest actually diverged from :prev — a
             #    failure before the build produced a new image leaves production
             #    untouched and must not trigger an ingress blip.
             NEED_RECREATE=0
-            for svc in 9router-9router 9router-9router-api 9router-headroom; do
+            for svc in 9router-9router 9router-9router-api; do
               if docker image inspect "$svc:prev" >/dev/null 2>&1; then
                 CUR_ID=$(docker image inspect "$svc:latest" --format '{{.Id}}' 2>/dev/null || true)
                 PREV_ID=$(docker image inspect "$svc:prev" --format '{{.Id}}')
@@ -298,7 +290,7 @@ jobs:
           key: ${{ secrets.TENCENT_SSH_KEY }}
           script: |
             # Scoped to this project's own image refs — safe on a shared daemon.
-            docker rmi 9router-9router:prev 9router-9router-api:prev 9router-headroom:prev 2>/dev/null || true
+            docker rmi 9router-9router:prev 9router-9router-api:prev 2>/dev/null || true
             # Project label scoping keeps co-located stacks (opencode-sandbox) on
             # this shared daemon safe. No `until=24h` floor: freshly built images
             # are <24h old, so the age filter matched nothing and this step

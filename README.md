@@ -18,7 +18,6 @@ flowchart LR
         caddy[Caddy]
         api[9router-api :20127]
         dashboard[9router :20128]
-        headroom[headroom :8787]
     end
     subgraph Storage
         DB[(SQLite)]
@@ -27,7 +26,6 @@ flowchart LR
     User --> CF --> T --> cloudflared --> caddy
     caddy --> api
     caddy --> dashboard
-    dashboard --> headroom
     api --> DB
     dashboard --> DB
 ```
@@ -59,7 +57,6 @@ The stack deploys to `/opt/9router` on the VPS:
 |---------|------|-------------|
 | `9router` | 20128 | Next.js dashboard UI (profile-gated, optional) |
 | `9router-api` | 20127 | Express LLM proxy API |
-| `headroom` | 8787 | Token compression/shaping proxy |
 | `caddy` | 80 | Reverse proxy (plain HTTP, TLS at Cloudflare edge) |
 | `cloudflared` | — | Cloudflare Tunnel connector |
 
@@ -112,7 +109,7 @@ Access locally:
 - API: `http://localhost:20127/api/health`
 - Dashboard: `http://localhost:20128`
 
-The local override keeps `caddy` and `cloudflared` stopped; only `9router`, `9router-api`, and `headroom` run.
+The local override keeps `caddy` and `cloudflared` stopped; only `9router` and `9router-api` run.
 
 ### 3. Cloudflare Tunnel and DNS guide
 
@@ -190,7 +187,7 @@ The workflow `.github/workflows/deploy.yml` deploys on:
 | Compose project | `9router` | `9router-preview` |
 | Compose file | `docker-compose.yml` | `docker-compose.preview.yml` |
 | Caddyfile | `proxy/Caddyfile` | `proxy/Caddyfile.preview` |
-| Containers | `9router`, `9router-api`, `headroom`, `caddy` | `9router-test`, `9router-api-test`, `headroom-test`, `caddy-test` |
+| Containers | `9router`, `9router-api`, `caddy` | `9router-test`, `9router-api-test`, `caddy-test` |
 | Data | `./data/9router` | `./data-preview/9router` |
 | Hostnames | `9router.vianhanif.link`, `9router-dashboard.vianhanif.link` | `9router-test.vianhanif.link`, `9router-dashboard-test.vianhanif.link` |
 

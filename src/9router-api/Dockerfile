@@ -37,28 +37,12 @@ COPY --from=ninesrc /app/9router /app/9router
 RUN npm install -g npm@11 && npm install --no-audit --no-fund
 RUN npm run build   # esbuild -> dist/server.js
 
-# ---- Stage 2.5: headroom-ai Python venv ----
-# Build toolchain + pip live ONLY here; the runner copies just the venv,
-# keeping it free of gcc/musl-dev/headers. Same base tag as the runner so
-# the python3 version and libc match. Debian (glibc) required: headroom-ai
-# >=0.21 ships only manylinux_2_28 wheels, no musllinux (Alpine).
-FROM node:22-bookworm-slim AS pyheadroom
-RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-venv \
-    && rm -rf /var/lib/apt/lists/*
-RUN python3 -m venv /opt/headroom-venv \
-    && /opt/headroom-venv/bin/pip install --no-cache-dir --only-binary :all: "headroom-ai[proxy,code]==0.37.0"
-RUN find /opt/headroom-venv -name __pycache__ -type d -prune -exec rm -rf {} + \
-    && rm -rf /root/.cache/pip
-
 # ---- Stage 3: runner ----
 FROM node:22-bookworm-slim
 ENV NODE_ENV=production \
     PORT=20127 \
-    NINEROUTER_HOME=/app/9router \
-    HEADROOM_PYTHON=/opt/headroom-venv/bin/python3
-RUN apt-get update && apt-get install -y --no-install-recommends python3 \
-    && rm -rf /var/lib/apt/lists/* \
-    && mkdir -p /app/9router /app/data /app/data-home \
+    NINEROUTER_HOME=/app/9router
+RUN mkdir -p /app/9router /app/data /app/data-home \
     && printf '#!/bin/sh\n# Fix mounted volume ownership (top-level only, non-blocking)\nchown node:node /app/data /app/data-home 2>/dev/null || true\nexec setpriv --reuid=node --regid=node --init-groups "$@"\n' > /entrypoint.sh \
     && chmod +x /entrypoint.sh \
     && ln -s /app/data-home /root/.9router
@@ -67,7 +51,6 @@ COPY --from=ninesrc /app/9router /app/9router
 COPY --from=apibuild /app/9router-api/node_modules /app/9router-api/node_modules
 COPY --from=apibuild /app/9router-api/dist /app/9router-api/dist
 COPY --from=apibuild /app/9router-api/package.json /app/9router-api/package.json
-COPY --from=pyheadroom /opt/headroom-venv /opt/headroom-venv
 # server.ts does `require('./package.json')` at runtime; bundled dist/server.js
 # resolves that relative to dist/, so mirror package.json there too.
 RUN cp /app/9router-api/package.json /app/9router-api/dist/package.json
