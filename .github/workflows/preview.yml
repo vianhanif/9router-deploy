@@ -117,7 +117,7 @@ jobs:
               # Config never synced (e.g. teardown before any deploy) — remove
               # by container name instead so teardown stays idempotent.
               echo "docker-compose.preview.yml not found — removing containers directly"
-              docker rm -f caddy-test 9router-test 9router-api-test headroom-test 2>/dev/null || true
+              docker rm -f caddy-test 9router-test 9router-api-test 2>/dev/null || true
               docker network rm 9router-preview-net 2>/dev/null || true
             fi
             # `down` still skips orphans (containers in the project whose service is
@@ -204,7 +204,7 @@ jobs:
 
             echo "Building preview: branch=$BRANCH ($NINEROUTER_SHA / $APIREPO_SHA), type=$TYPE"
 
-            SERVICES="headroom-test"
+            SERVICES=""
             if [[ "$TYPE" == "dashboard" || "$TYPE" == "both" ]]; then
               SERVICES="$SERVICES 9router-test"
             fi
@@ -239,9 +239,8 @@ jobs:
             fi
 
             # Explicit service list — without it `up` would start every service
-            # in the file regardless of `type`. headroom-test is always included
-            # because 9router-test depends_on it (same coupling as production).
-            SERVICES="caddy-test headroom-test"
+            # in the file regardless of `type`.
+            SERVICES="caddy-test"
             if [[ "$TYPE" == "dashboard" || "$TYPE" == "both" ]]; then
               SERVICES="$SERVICES 9router-test"
             fi
