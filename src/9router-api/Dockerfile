@@ -13,6 +13,9 @@ RUN git init /app/9router && \
     git fetch --depth 1 origin ${NINEROUTER_VERSION} && \
     git checkout FETCH_HEAD
 WORKDIR /app/9router
+# Prefer IPv4 for DNS: the VPS returns AAAA but has no working IPv6, so node-gyp's
+# header fetch ETIMEDOUTs on the IPv6 attempt during cold builds. See deploy flake 37730994047.
+ENV NODE_OPTIONS=--dns-result-order=ipv4first
 # Fix arborist crash in npm 10.9.8
 RUN npm install -g npm@11 && npm install --omit=dev --no-audit --no-fund
 
@@ -33,6 +36,8 @@ WORKDIR /app/9router-api
 # (@/* -> ../9router/src/*, open-sse/* -> ../9router/open-sse/*) resolve
 # during the esbuild bundle. Mirrors Stage 3, which copies /app/9router too.
 COPY --from=ninesrc /app/9router /app/9router
+# Prefer IPv4 for DNS (broken IPv6 on the VPS → node-gyp ETIMEDOUT on AAAA).
+ENV NODE_OPTIONS=--dns-result-order=ipv4first
 # Fix arborist crash in npm 10.9.8
 RUN npm install -g npm@11 && npm install --no-audit --no-fund
 RUN npm run build   # esbuild -> dist/server.js
