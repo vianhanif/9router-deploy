@@ -299,11 +299,12 @@ jobs:
               --filter "label=com.docker.compose.project=9router"
             # NEVER `docker builder prune -af` on a shared VPS: it evicts the
             # BuildKit cache of every project on the daemon.
-            # 72h age floor kept deliberately: a tighter floor forces cold
-            # rebuilds, and the build step is the OOM-riskiest on the 1.7GB VPS.
-            # `--max-used-space 3G` enforces a hard size ceiling — the 72h floor
-            # alone let the cache drift to ~6GB (measured on the VPS), all
-            # reclaimable but sitting on a 40GB disk. 3G holds a couple of
-            # recent builds hot, so deploys stay warm without cold-rebuild OOM.
+            # `--max-used-space 3G` alone is the hard ceiling. Do NOT re-add
+            # `--filter "until=72h"`: the age filter restricts pruning to cache
+            # older than 72h, so on a deploy-day where all cache is <72h it
+            # matches nothing and the cap never bites — cache drifted to ~6GB
+            # (measured on the VPS) while nominally "capped" at 3G. The cap alone
+            # keeps the most-recent 3G hot (warm deploys, no cold-rebuild OOM)
+            # and actually enforces the ceiling.
             # (Was `--keep-storage`; deprecated in Docker CLI 27.5.1, same semantics.)
-            docker builder prune -f --filter "until=72h" --max-used-space 3G
+            docker builder prune -f --max-used-space 3G
