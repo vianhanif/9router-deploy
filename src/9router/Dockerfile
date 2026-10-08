@@ -21,6 +21,10 @@ WORKDIR /app
 RUN apk --no-cache upgrade && apk --no-cache add python3 make g++ linux-headers
 
 COPY --from=source /app/source/package.json ./
+# Prefer IPv4 for DNS: the VPS returns AAAA but has no working IPv6, so node-gyp's
+# native build (better-sqlite3) ETIMEDOUTs on the IPv6 attempt during cold builds.
+# Same fix as src/9router-api/Dockerfile (PR #9).
+ENV NODE_OPTIONS=--dns-result-order=ipv4first
 # Fix arborist crash ("edgesOut") in npm 10.9.8 by upgrading to stable 11.x
 RUN npm install -g npm@11 && npm install
 
