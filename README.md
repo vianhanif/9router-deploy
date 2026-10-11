@@ -46,12 +46,14 @@ The stack deploys to `/opt/9router` on the VPS:
 /opt/9router
 ├── docker-compose.yml          # Production stack
 ├── proxy/Caddyfile             # Reverse proxy config
-├── src/9router/Dockerfile      # Dashboard image build
-├── src/9router-api/Dockerfile  # API image build
+├── src/9router/Dockerfile      # Dashboard image build (manual-rebuild fallback)
+├── src/9router-api/Dockerfile  # API image build (manual-rebuild fallback)
 ├── env/                        # Per-service env files (never committed)
 ├── cloudflared/                # Tunnel credentials JSON + config
 └── data/                       # Shared SQLite data + home volumes
 ```
+
+> Production images are built on GitHub runners and pulled from GHCR; the Dockerfiles on the host are unused for the production path and retained only for manual rebuilds.
 
 ### Services
 
@@ -152,10 +154,18 @@ api.example.com        CNAME  <tunnel-id>.cfargotunnel.com
 
 ### Manual (production, with tunnel)
 
+Production images are prebuilt on GitHub runners and published to GHCR:
+
 ```bash
-docker compose build 9router 9router-api
-docker compose up -d
+docker compose --profile dashboard pull 9router 9router-api headroom
+docker compose --profile dashboard up -d
 docker compose ps
+```
+
+For local development from source, use the local override (builds instead of pulling):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.local.yml --profile dashboard up -d
 ```
 
 ### CI/CD with GitHub Actions
@@ -173,13 +183,18 @@ The workflow `.github/workflows/deploy.yml` deploys on:
 | `TENCENT_USER` | SSH username |
 | `TENCENT_SSH_KEY` | SSH private key for deployment |
 
+Images are built on GitHub-hosted runners and pushed to GitHub Container Registry (`ghcr.io/vianhanif/9router-deploy/*`), not on the VPS. The packages are public, so the VPS pulls anonymously and needs no registry credentials. The workflow job carries an explicit `permissions:` block (`contents: read`, `packages: write`, `actions: write`) because the repository's default workflow-token permission is read-only.
+
 **Pipeline steps:**
 
-1. **Sync config** — copies `docker-compose.yml`, `proxy/Caddyfile`, and both Dockerfiles to `/opt/9router` via SCP.
-2. **Build new images** — resolves source SHAs and builds `9router` and `9router-api`; previous images are tagged `:prev` for rollback.
-3. **Smoke test** — runs each new image on scratch ports (`20328`/`20327`) and verifies `/api/health` plus the `/v1/responses` route. The deploy aborts if either check fails.
-4. **Switch** — recreates the stack with the new images (`--force-recreate`), then stops the profile-gated dashboard.
-5. **Prune** — removes `:prev` rollback images, dangling images, and build cache (only after a successful deploy).
+1. **Resolve source SHAs** — resolves the `9router` / `9router-api` refs to commit SHAs (`repository_dispatch` carries no inputs and falls back to `master`).
+2. **Sync config** — copies `docker-compose.yml`, `proxy/Caddyfile`, and both Dockerfiles to `/opt/9router` via SCP (Dockerfiles are kept on the host for manual rebuild fallback).
+3. **Build & push** — `docker/build-push-action` builds `9router` and a single image tagged for both `9router-api` and `headroom`, pushing `:latest` plus a `:sha-<sha>` audit tag to GHCR with GitHub Actions build cache.
+4. **Smoke test** — runs each new image on scratch ports (`20328`/`20327`) and verifies `/api/health` plus the `/v1/responses` route. Uses the SHA-tagged refs so the implicit pull does not disturb the running `:latest` that `:prev` is about to be captured from. The deploy aborts if any check fails.
+5. **Switch** — tags the current `:latest` images as `:prev`, pulls the new images, then recreates the stack (`--force-recreate`).
+6. **Prune** — removes `:prev` images, stale `:sha-*` tags from earlier deploys, dangling images, and build cache (only after a successful deploy).
+
+**Rollback:** if any step after the smoke test fails, the `rollback` job restores `:prev` → `:latest` and recreates the stack. This works purely from images already present on the VPS, so it needs neither registry access nor a rebuild.
 
 ### Preview deployments (non-master branches)
 
@@ -281,6 +296,7 @@ The workflow `.github/workflows/deploy.yml` deploys on:
 
 - Never commit real secrets: `.env`, `env/*.env`, and `cloudflared/*.json` are gitignored.
 - The CI/CD pipeline reads credentials exclusively from GitHub Actions secrets (`TENCENT_HOST`, `TENCENT_USER`, `TENCENT_SSH_KEY`).
+- Production images are built on GitHub-hosted runners in a clean environment with no long-lived secrets. GHCR packages are public (free tier, no quota charges), so pulls from the VPS are anonymous with no registry credentials.
 - Keep tunnel credentials mode `600` on the server.
 - This repository contains no real secrets; all examples use placeholder values.
 

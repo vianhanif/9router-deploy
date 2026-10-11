@@ -26,12 +26,58 @@ concurrency:
   group: deploy-9router
   cancel-in-progress: false
 
+# GHCR push + Actions cache both require explicit opt-in: the repo default
+# workflow-token permission is `read`, so without this block a push 403s.
+permissions:
+  contents: read
+  packages: write
+  actions: write
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      REGISTRY: ghcr.io/${{ github.repository_owner }}
+      IMG_9ROUTER: ghcr.io/${{ github.repository_owner }}/9router-deploy/9router
+      IMG_9ROUTER_API: ghcr.io/${{ github.repository_owner }}/9router-deploy/9router-api
+      IMG_HEADROOM: ghcr.io/${{ github.repository_owner }}/9router-deploy/headroom
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Resolve source SHAs
+        id: resolve
+        env:
+          INPUT_NINEROUTER: ${{ github.event.inputs.ninerouter_branch }}
+          INPUT_API: ${{ github.event.inputs.api_branch }}
+        run: |
+          set -euo pipefail
+
+          # repository_dispatch carries no `inputs`, so both may be empty.
+          NINEROUTER_TARGET="${INPUT_NINEROUTER:-master}"
+          API_TARGET="${INPUT_API:-master}"
+
+          resolve_sha() {
+            local ref="$1" repo="$2" sha
+            if [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "$ref"
+              return
+            fi
+            sha=$(git ls-remote "$repo" refs/heads/"$ref" 2>/dev/null | cut -f1)
+            if [[ -z "$sha" ]]; then
+              echo "ERROR: cannot resolve ref '$ref' in $repo" >&2
+              exit 1
+            fi
+            echo "$sha"
+          }
+
+          NINEROUTER_SHA=$(resolve_sha "$NINEROUTER_TARGET" "https://github.com/vianhanif/9router.git")
+          APIREPO_SHA=$(resolve_sha "$API_TARGET" "https://github.com/vianhanif/9router-api.git")
+
+          echo "Deploying: 9router=$NINEROUTER_TARGET ($NINEROUTER_SHA), 9router-api=$API_TARGET ($APIREPO_SHA)"
+
+          echo "ninerouter_sha=$NINEROUTER_SHA" >> "$GITHUB_OUTPUT"
+          echo "apirepo_sha=$APIREPO_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Sync deploy config
         uses: appleboy/scp-action@v0.1.7
@@ -42,50 +88,39 @@ jobs:
           source: "docker-compose.yml,proxy/Caddyfile,src/9router/Dockerfile,src/9router-api/Dockerfile"
           target: /opt/9router
 
-      - name: Build new images
-        uses: appleboy/ssh-action@v1.0.3
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build & push 9router
+        uses: docker/build-push-action@v6
         with:
-          host: ${{ secrets.TENCENT_HOST }}
-          username: ${{ secrets.TENCENT_USER }}
-          key: ${{ secrets.TENCENT_SSH_KEY }}
-          command_timeout: 30m
-          script: |
-            set -e
-            cd /opt/9router
+          context: src/9router
+          push: true
+          tags: |
+            ${{ env.IMG_9ROUTER }}:sha-${{ steps.resolve.outputs.ninerouter_sha }}
+            ${{ env.IMG_9ROUTER }}:latest
+          build-args: |
+            NINEROUTER_VERSION=${{ steps.resolve.outputs.ninerouter_sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-            INPUT_NINEROUTER="${{ github.event.inputs.ninerouter_branch }}"
-            INPUT_API="${{ github.event.inputs.api_branch }}"
-
-            NINEROUTER_TARGET="${INPUT_NINEROUTER:-master}"
-            API_TARGET="${INPUT_API:-master}"
-
-            docker tag 9router-9router:latest 9router-9router:prev 2>/dev/null || true
-            docker tag 9router-9router-api:latest 9router-9router-api:prev 2>/dev/null || true
-            docker tag 9router-headroom:latest 9router-headroom:prev 2>/dev/null || true
-
-            resolve_sha() {
-              local ref="$1" repo="$2" sha
-              if [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
-                echo "$ref"
-                return
-              fi
-              sha=$(git ls-remote "$repo" refs/heads/"$ref" 2>/dev/null | cut -f1)
-              if [[ -z "$sha" ]]; then
-                echo "ERROR: cannot resolve ref '$ref' in $repo" >&2
-                exit 1
-              fi
-              echo "$sha"
-            }
-
-            NINEROUTER_SHA=$(resolve_sha "$NINEROUTER_TARGET" "https://github.com/vianhanif/9router.git")
-            APIREPO_SHA=$(resolve_sha "$API_TARGET" "https://github.com/vianhanif/9router-api.git")
-
-            echo "Deploying: 9router=$NINEROUTER_TARGET ($NINEROUTER_SHA), 9router-api=$API_TARGET ($APIREPO_SHA)"
-
-            docker compose build \
-              --build-arg NINEROUTER_VERSION=$NINEROUTER_SHA \
-              --build-arg APIREPO_VERSION=$APIREPO_SHA \
-              9router 9router-api headroom
+      # headroom and 9router-api share one Dockerfile and differ only by the
+      # compose-level entrypoint/command, so build once and tag four refs.
+      - name: Build & push 9router-api + headroom
+        uses: docker/build-push-action@v6
+        with:
+          context: src/9router-api
+          push: true
+          tags: |
+            ${{ env.IMG_9ROUTER_API }}:sha-${{ steps.resolve.outputs.apirepo_sha }}
+            ${{ env.IMG_9ROUTER_API }}:latest
+            ${{ env.IMG_HEADROOM }}:sha-${{ steps.resolve.outputs.apirepo_sha }}
+            ${{ env.IMG_HEADROOM }}:latest
+          build-args: |
+            NINEROUTER_VERSION=${{ steps.resolve.outputs.ninerouter_sha }}
+            APIREPO_VERSION=${{ steps.resolve.outputs.apirepo_sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Smoke test new images
         uses: appleboy/ssh-action@v1.0.3
@@ -115,8 +150,10 @@ jobs:
             # 1. Start headroom dependency. Use a UNIQUE alias — reusing the live
             #    `headroom` alias on the shared network would let Docker DNS route
             #    production traffic to this throwaway container.
+            # Smoke the SHA-tagged refs (not :latest) so this implicit pull does
+            # not overwrite the local :latest before the switch step captures :prev.
             docker run -d --name smoke-headroom --network 9router_9router-net --network-alias smoke-headroom \
-              --entrypoint "setpriv" 9router-headroom:latest \
+              --entrypoint "setpriv" ${{ env.IMG_HEADROOM }}:sha-${{ steps.resolve.outputs.apirepo_sha }} \
               --reuid=node --regid=node --init-groups /opt/headroom-venv/bin/headroom proxy --host 0.0.0.0 --port 8787
 
             # 2. Start Dashboard with exact configuration parameters.
@@ -126,7 +163,7 @@ jobs:
               --env-file ./env/9router.env -e PORT=20328 -e HEADROOM_URL=http://smoke-headroom:8787 \
               -p 127.0.0.1:20328:20328 \
               -v /opt/9router/data/9router:/app/data -v /opt/9router/data-home/9router-home:/app/data-home \
-              9router-9router:latest
+              ${{ env.IMG_9ROUTER }}:sha-${{ steps.resolve.outputs.ninerouter_sha }}
 
             echo "Awaiting dashboard boot up at ${DASHBOARD_URL}..."
             for i in $(seq 1 20); do
@@ -145,7 +182,7 @@ jobs:
               --env-file ./env/9router-api.env -e PORT=20327 \
               -p 127.0.0.1:20327:20327 \
               -v /opt/9router/data/9router:/app/data -v /opt/9router/data-home/9router-home:/app/data-home \
-              9router-9router-api:latest
+              ${{ env.IMG_9ROUTER_API }}:sha-${{ steps.resolve.outputs.apirepo_sha }}
 
             echo "Awaiting api gateway boot up at ${API_URL}..."
             for i in $(seq 1 20); do
@@ -183,6 +220,18 @@ jobs:
           script: |
             set -e
             cd /opt/9router
+
+            # Capture the currently-running images as :prev BEFORE pulling, so a
+            # failed switch can roll back from local images with no registry access.
+            # (Smoke used SHA-tagged refs, so local :latest is still the old image.)
+            docker tag ${{ env.IMG_9ROUTER }}:latest ${{ env.IMG_9ROUTER }}:prev 2>/dev/null || true
+            docker tag ${{ env.IMG_9ROUTER_API }}:latest ${{ env.IMG_9ROUTER_API }}:prev 2>/dev/null || true
+            docker tag ${{ env.IMG_HEADROOM }}:latest ${{ env.IMG_HEADROOM }}:prev 2>/dev/null || true
+
+            echo "Pulling new images from GHCR..."
+            # 9router is profile-gated, so a bare `pull` would skip it; list the
+            # services explicitly and activate the profile.
+            docker compose --profile dashboard pull 9router 9router-api headroom
 
             echo "Starting production stack..."
 
@@ -249,14 +298,28 @@ jobs:
           username: ${{ secrets.TENCENT_USER }}
           key: ${{ secrets.TENCENT_SSH_KEY }}
           script: |
+            set -e
             # Scoped to this project's own image refs — safe on a shared daemon.
-            docker rmi 9router-9router:prev 9router-9router-api:prev 9router-headroom:prev 2>/dev/null || true
-            # Scope image cleanup to the 9router compose project (label filter)
-            # with a 24h age floor, so the co-located opencode-sandbox stack's
-            # fresh dangling layers/cache are never collected from here.
-            docker image prune -f \
-              --filter "label=com.docker.compose.project=9router" \
-              --filter "until=24h"
+            docker rmi ${{ env.IMG_9ROUTER }}:prev ${{ env.IMG_9ROUTER_API }}:prev ${{ env.IMG_HEADROOM }}:prev 2>/dev/null || true
+
+            # Stale sha-tagged prod images accumulate (~5GB per deploy) because
+            # `:latest` is re-pointed each release while the old image keeps only
+            # its sha tag. NOTE: `docker image prune` supports only `until=` and
+            # `label=` filters — there is NO `reference=` filter (it would fail
+            # the step). Use `docker image ls --filter reference=` (which DOES
+            # support globs) to enumerate, keeping only the just-deployed SHAs.
+            for ref in "${{ env.IMG_9ROUTER }}" "${{ env.IMG_9ROUTER_API }}" "${{ env.IMG_HEADROOM }}"; do
+              keep_sha="${{ steps.resolve.outputs.apirepo_sha }}"
+              [ "$ref" = "${{ env.IMG_9ROUTER }}" ] && keep_sha="${{ steps.resolve.outputs.ninerouter_sha }}"
+              docker image ls --format '{{.Repository}}:{{.Tag}}' \
+                --filter "reference=${ref}:sha-*" \
+                | grep -v ":sha-${keep_sha}$" \
+                | xargs -r docker rmi 2>/dev/null || true
+            done
+
+            # Dangling (untagged) layers from any local build, age-bound so the
+            # co-located opencode-sandbox stack's fresh layers are never collected.
+            docker image prune -f --filter "until=24h"
             # NEVER `docker builder prune -af` on a shared VPS: it evicts the
             # BuildKit cache of every project on the daemon. Age-bound it.
             docker builder prune -f --filter "until=72h"
@@ -275,18 +338,19 @@ jobs:
             echo "Deployment failed — restoring previous images and cleaning up smoke containers..."
             # 1. Remove smoke containers that the workflow may have left behind
             docker rm -f smoke-9router smoke-api smoke-headroom >/dev/null 2>&1 || true
+
             # 2. Restore previous images (if any) so production keeps running.
             #    Only recreate when :latest actually diverged from :prev — a
             #    failure before the build produced a new image leaves production
             #    untouched and must not trigger an ingress blip.
             NEED_RECREATE=0
-            for svc in 9router-9router 9router-9router-api 9router-headroom; do
-              if docker image inspect "$svc:prev" >/dev/null 2>&1; then
-                CUR_ID=$(docker image inspect "$svc:latest" --format '{{.Id}}' 2>/dev/null || true)
-                PREV_ID=$(docker image inspect "$svc:prev" --format '{{.Id}}')
+            for svc_ref in "${{ env.IMG_9ROUTER }}" "${{ env.IMG_9ROUTER_API }}" "${{ env.IMG_HEADROOM }}"; do
+              if docker image inspect "${svc_ref}:prev" >/dev/null 2>&1; then
+                CUR_ID=$(docker image inspect "${svc_ref}:latest" --format '{{.Id}}' 2>/dev/null || true)
+                PREV_ID=$(docker image inspect "${svc_ref}:prev" --format '{{.Id}}')
                 if [ "$CUR_ID" != "$PREV_ID" ]; then
-                  echo "Restoring $svc:prev -> $svc:latest"
-                  docker tag "$svc:prev" "$svc:latest"
+                  echo "Restoring ${svc_ref}:prev -> ${svc_ref}:latest"
+                  docker tag "${svc_ref}:prev" "${svc_ref}:latest"
                   NEED_RECREATE=1
                 fi
               fi

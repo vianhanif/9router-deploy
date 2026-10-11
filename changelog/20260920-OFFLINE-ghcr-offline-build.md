@@ -2,9 +2,10 @@
 
 - **Date:** 2026-09-20
 - **Ticket:** OFFLINE
-- **Status:** Planned — all 7 open questions resolved (see Resolutions). **Documentation only: no code, no workflow changes in this PR.**
-- **Revision:** R2 (2026-09-20) — records resolutions of the 7 open questions (evidence-verified)
-- **Base commit:** `41f3db5` (`master`)
+- **Status:** Implemented — code changes landed on `feature/offline-ghcr-build`. Not merged; no deployment run.
+- **Revision:** R3 (2026-10-12) — records the implementation, including the `docker image prune` filter correction (see Implementation Notes). Supersedes the R2 "documentation only" scope.
+- **Prior revisions:** R2 (2026-09-20) — resolved the 7 open questions. R1 — initial plan.
+- **Base commit:** `a9d148b` (`feature/offline-ghcr-build`) — the R2 planning doc; implementation diff sits on top.
 - **Branch:** `feature/offline-ghcr-build` (draft PR #8)
 
 ## Task Overview
@@ -78,7 +79,7 @@ Single job retained; steps re-ordered around a runner-side build stage, then SSH
 - Smoke test (`90-174`): image refs → GHCR refs — `9router-headroom:latest` (`119`), `9router-9router:latest` (`129`), `9router-9router-api:latest` (`148`). Miss one and the smoke test silently tests the previous image.
 - Prune (`245-262`):
   - `docker rmi ...:prev` refs (`253`) → GHCR refs.
-  - **`docker image prune --filter label=com.docker.compose.project=9router` (`257-259`) stops matching** — compose applies that label to images it **builds**; pulled registry images carry no compose project label. Add `--filter "reference=ghcr.io/vianhanif/9router-deploy/*"` (keep `until=24h`).
+  - **`docker image prune --filter label=com.docker.compose.project=9router` (`257-259`) stops matching** — compose applies that label to images it **builds**; pulled registry images carry no compose project label. ~~Add `--filter "reference=ghcr.io/vianhanif/9router-deploy/*"`~~ **CORRECTED (R3): `image prune` has no `reference=` filter (only `until=`/`label=`).** Implemented instead as explicit `docker image ls --filter reference=<ref>:sha-* | grep -v :sha-<keep> | xargs -r docker rmi`, plus `docker image prune -f --filter "until=24h"` (label filter dropped).
   - **Keep `docker builder prune -f --filter until=72h` (`262`)** — still needed for preview builds (`preview.yml:203`) until preview migrates.
 - Rollback (`264-305`): logic unchanged; swap the 3 svc refs in the `:prev` loop (`283`) + restore-tag (`289`). Registry-free: works from local images with GHCR down.
 - Keep: concurrency group (`25-27`), smoke/verify gates, `if: failure()` rollback.
@@ -184,3 +185,25 @@ Do NOT keep a dual build path. Reasons:
 - Any change to `preview.yml` or `docker-compose.preview.yml` (push trigger, preview pull-from-GHCR) — deliberately excluded from this PR.
 - Container runtime/resource limits, TLS, ufw, hostname alignment, REMED leftovers.
 - GHCR quota cleanup automation, JWT rotation, Kiro.
+
+## Implementation Notes (R3)
+
+Diff on top of `a9d148b`: `deploy.yml` (+/- heavy), `docker-compose.yml`, `docker-compose.local.yml`, `README.md`.
+
+**Corrections made while implementing (plan text was wrong or incomplete):**
+
+1. **`docker image prune --filter reference=` does not exist.** The plan's prune step proposed `docker image prune ... --filter "reference=ghcr.io/vianhanif/9router-deploy/*"`. Docker only supports `until=` and `label=` on `image prune` — the run would fail. Replaced with an explicit enumeration + targeted rm:
+   ```sh
+   docker image ls --format '{{.Repository}}:{{.Tag}}' --filter "reference=${ref}:sha-*" \
+     | grep -v ":sha-${keep_sha}$" | xargs -r docker rmi
+   ```
+   Also dropped the plan's `label=com.docker.compose.project=9router` filter: pulled registry images carry no compose-project label, so it would match nothing.
+2. **`permissions:` is workflow-level, not job-level.** R2 placed the block under the job; it now sits at the workflow root (above `jobs:`) and applies to the single `deploy` job.
+3. **Smoke test must use sha-tagged refs, not `:latest`.** `docker run` on a GHCR `:latest` ref implicitly pulls, overwriting the local `:latest` before the switch step captures `:prev` — which silently defeated rollback. Smoke now uses `:sha-<resolved>`; the `:prev` capture moved to the top of the switch step, before the explicit `pull`.
+4. **Single build, 4 tags.** `9router-api` + `headroom` share one Dockerfile/context, so one `build-push-action` step emits both `sha` + `latest` tags (halves build time vs two identical builds).
+
+**Verified:** YAML parses for all three files; structural asserts pass — workflow `permissions` == `{contents: read, packages: write, actions: write}`; compose services `9router`/`9router-api`/`headroom` have `image:` and no `build:`; local override has `build:` for all three.
+
+**Not verified:** no local Docker → `docker compose config` and a real build/pull were not run. Full validation requires either CI or a Docker host.
+
+**Still open (carried from plan):** first-push secret-bake audit (Q2 precondition); GHCR package visibility flip to public before first deploy (Risk 3); `cleanup-ghcr-tags.yml` (Q5) not yet written.

@@ -9,12 +9,23 @@
 # not activated by default, so they remain stopped when using this file.
 
 services:
+  # Base compose pulls prebuilt GHCR images. For local dev we build from source
+  # instead: an override providing `build:` alongside the base `image:` makes
+  # `docker compose up` build and tag locally.
   9router:
+    build: ./src/9router
     profiles: ["dashboard"]
     ports:
       - "20128:20128"
+  headroom:
+    build:
+      context: ./src/9router-api
+      dockerfile: Dockerfile
   9router-api:
     # 9router-api has no profile in base; keep it always on
+    build:
+      context: ./src/9router-api
+      dockerfile: Dockerfile
     ports:
       - "20127:20127"
   caddy:
