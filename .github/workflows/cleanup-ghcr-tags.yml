@@ -1,0 +1,71 @@
+name: cleanup-ghcr-tags
+
+# Retention policy (plan Q5): keep `:latest` and `:prev` forever; sha-* tags are
+# audit-only and deleted after RETENTION_DAYS. Correctness never depends on these
+# versions existing — rollback uses the local `:prev` tag, not the registry.
+#
+# NOTE: deleting user-scoped package versions may require a PAT with
+# `delete:packages` if GITHUB_TOKEN is rejected. If this workflow 403s, swap
+# `secrets.GITHUB_TOKEN` for a PAT secret.
+
+on:
+  schedule:
+    - cron: '0 3 1 * *' # monthly, 1st @ 03:00 UTC
+  workflow_dispatch:
+
+permissions:
+  packages: write
+
+env:
+  OWNER: vianhanif
+  PACKAGES: 9router 9router-api headroom
+  RETENTION_DAYS: 7
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete stale sha-* package versions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          cutoff=$(date -u -d "-${RETENTION_DAYS} days" +%s)
+          echo "cutoff: $(date -u -d "@${cutoff}" -Is)"
+
+          total=0
+          for pkg in $PACKAGES; do
+            echo "::group::$pkg"
+
+            if ! gh api --paginate --slurp \
+              "/users/${OWNER}/packages/container/${pkg}/versions" \
+              > /tmp/versions.json 2>/dev/null; then
+              echo "package not found or not readable — skipping"
+              echo "::endgroup::"
+              continue
+            fi
+
+            # Never delete a version carrying `latest`, `prev`, or a `pr-*` tag.
+            # Only consider untagged or sha-* versions, and only past the cutoff.
+            jq -r --argjson cutoff "$cutoff" '
+              .[][]
+              | (.metadata.container.tags // []) as $t
+              | select($t | any(. == "latest" or . == "prev" or startswith("pr-")) | not)
+              | select($t | length == 0 or any(startswith("sha-")))
+              | select((.created_at | fromdateiso8601) < $cutoff)
+              | "\(.id)\t\(.created_at)\t\($t | join(","))"
+            ' /tmp/versions.json > /tmp/stale.tsv
+
+            while IFS=$'\t' read -r id created tags; do
+              [ -n "$id" ] || continue
+              echo "delete id=$id created=$created tags=${tags:-<untagged>}"
+              gh api -X DELETE \
+                "/users/${OWNER}/packages/container/${pkg}/versions/${id}"
+              total=$((total + 1))
+            done < /tmp/stale.tsv
+
+            echo "::endgroup::"
+          done
+
+          echo "Deleted ${total} stale version(s)."
