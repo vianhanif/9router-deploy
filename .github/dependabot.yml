@@ -1,0 +1,18 @@
+version: 2
+updates:
+  # Tracks the pinned cloudflared tag in docker-compose.yml so the
+  # "WRN ... version outdated" nag cannot silently rot.
+  # PR-only: never auto-merges. CI (deploy.yml) deploys on merge.
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore(deps)"
+    labels:
+      - dependencies
+    groups:
+      docker-compose:
+        patterns:
+          - "*"
