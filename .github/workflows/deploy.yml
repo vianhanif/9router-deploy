@@ -122,6 +122,32 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # TODO(blocker): secret `GHCR_PULL_TOKEN` does NOT exist in this repository
+      # yet. Before this branch can deploy, the repo owner must create it as a
+      # classic PAT with the `read:packages` scope. Until then this step fails
+      # loudly and the smoke test cannot pull the new images from GHCR.
+      #
+      # The login persists in /root/.docker/config.json on the VPS for later
+      # steps in this job (each ssh-action step is a separate connection, so the
+      # credential cannot be scoped to one step without re-logging in each time).
+      - name: Login to GHCR on VPS
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+        with:
+          host: ${{ secrets.TENCENT_HOST }}
+          username: ${{ secrets.TENCENT_USER }}
+          key: ${{ secrets.TENCENT_SSH_KEY }}
+          envs: GHCR_PULL_TOKEN
+          script: |
+            set -e
+            if [ -z "${GHCR_PULL_TOKEN}" ]; then
+              echo "ERROR: secret GHCR_PULL_TOKEN is empty — create it (classic PAT, read:packages)"
+              exit 1
+            fi
+            echo "${GHCR_PULL_TOKEN}" | docker login ghcr.io \
+              -u "${{ github.repository_owner }}" --password-stdin
+
       - name: Smoke test new images
         uses: appleboy/ssh-action@v1.0.3
         with:
