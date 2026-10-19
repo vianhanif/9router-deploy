@@ -1,0 +1,119 @@
+name: ghcr-pull-test
+
+# Dispatch-only. A `push` trigger is intentionally NOT used: the workflow
+# would fire before `build-test.yml` has pushed the `:test-ghcr` images, so the
+# pull would always race and fail. The workflow is already registered (it has
+# run once), so `workflow_dispatch` is sufficient.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ghcr-pull-test
+  cancel-in-progress: false
+
+jobs:
+  pull:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pull test images on VPS
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+        with:
+          host: ${{ secrets.TENCENT_HOST }}
+          username: ${{ secrets.TENCENT_USER }}
+          key: ${{ secrets.TENCENT_SSH_KEY }}
+          envs: GHCR_PULL_TOKEN
+          command_timeout: 20m
+          script: |
+            set -e
+
+            if [ -z "$GHCR_PULL_TOKEN" ]; then
+              echo "ERROR: GHCR_PULL_TOKEN is empty — secret not set on this repo"
+              exit 1
+            fi
+            echo "GHCR_PULL_TOKEN is set (length ${#GHCR_PULL_TOKEN})"
+
+            REGISTRY=ghcr.io
+            OWNER="${{ github.repository_owner }}"
+            BASE="$REGISTRY/$OWNER/9router-deploy"
+            IMAGES="$BASE/9router:test-ghcr $BASE/9router-api:test-ghcr"
+
+            echo
+            echo "=== DISK BEFORE ==="
+            df -h /
+            echo
+            docker system df
+
+            echo
+            echo "=== LOGIN ==="
+            echo "$GHCR_PULL_TOKEN" | docker login "$REGISTRY" -u "$OWNER" --password-stdin
+            echo "LOGIN OK"
+
+            echo
+            echo "=== PULL ==="
+            pull_fail=0
+            for ref in $IMAGES; do
+              echo "--- pulling $ref"
+              if ! docker pull "$ref"; then
+                echo "PULL FAILED: $ref"
+                pull_fail=1
+              fi
+            done
+            if [ "$pull_fail" -ne 0 ]; then
+              echo "ERROR: at least one pull failed"
+              exit 1
+            fi
+
+            echo
+            echo "=== LOCAL IMAGES (with digests) ==="
+            docker image ls --digests --filter="reference=$BASE/*"
+
+            echo
+            echo "=== ASSERT PRESENT ==="
+            missing=0
+            for ref in $IMAGES; do
+              id=$(docker image ls -q --filter="reference=$ref" | head -n1)
+              if [ -z "$id" ]; then
+                echo "MISSING: $ref"
+                missing=1
+              else
+                echo "OK: $ref -> $id"
+              fi
+            done
+            if [ "$missing" -ne 0 ]; then
+              echo "ERROR: one or more images are not present locally"
+              docker logout "$REGISTRY" || true
+              exit 1
+            fi
+
+            echo
+            echo "=== LOGOUT ==="
+            docker logout "$REGISTRY"
+
+            echo
+            echo "=== CLEANUP (rmi pulled images) ==="
+            rmi_fail=0
+            for ref in $IMAGES; do
+              if docker image rm "$ref"; then
+                echo "removed $ref"
+              else
+                echo "WARN: could not remove $ref"
+                rmi_fail=1
+              fi
+            done
+
+            echo
+            echo "=== DISK AFTER ==="
+            df -h /
+            echo
+            docker system df
+
+            if [ "$rmi_fail" -ne 0 ]; then
+              echo "WARN: cleanup incomplete (see above)"
+            fi
+            echo
+            echo "GHCR PULL TEST OK"

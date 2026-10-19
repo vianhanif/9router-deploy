@@ -1,0 +1,243 @@
+name: build-test
+
+# Phase validation for the GHCR offline-build cutover: builds both production
+# images with Buildx on the runner, pushes TEST tags only
+# (:test-ghcr-<sha> / :test-ghcr) to GHCR, then boot-checks them on the runner.
+# No deploy, no VPS, no SSH, no prod tags — zero production impact.
+#
+# The push trigger registers the workflow file on the default branch — a
+# workflow that has never appeared on the default branch is not dispatchable
+# (workflow_dispatch would 404 until a push with this file has been seen).
+
+on:
+  workflow_dispatch:
+    inputs:
+      ninerouter_branch:
+        description: "9router branch or SHA"
+        default: master
+        required: false
+      api_branch:
+        description: "9router-api branch or SHA"
+        default: master
+        required: false
+  push:
+    paths:
+      - 'src/**'
+      - 'docker-compose*.yml'
+      - '.github/workflows/build-test.yml'
+      - '.github/workflows/deploy.yml'
+
+# Distinct from deploy.yml's `deploy-9router` group so a test run can never
+# cancel a real deploy.
+concurrency:
+  group: build-test
+  cancel-in-progress: true
+
+# GHCR push + GHA cache both need explicit opt-in (repo default token is read).
+permissions:
+  contents: read
+  packages: write
+  actions: write
+
+env:
+  IMG_9ROUTER: ghcr.io/${{ github.repository_owner }}/9router-deploy/9router
+  IMG_9ROUTER_API: ghcr.io/${{ github.repository_owner }}/9router-deploy/9router-api
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      ninerouter_sha: ${{ steps.resolve.outputs.ninerouter_sha }}
+      apirepo_sha: ${{ steps.resolve.outputs.apirepo_sha }}
+    steps:
+      - name: Resolve source SHAs
+        id: resolve
+        env:
+          INPUT_NINEROUTER: ${{ github.event.inputs.ninerouter_branch }}
+          INPUT_API: ${{ github.event.inputs.api_branch }}
+        run: |
+          set -euo pipefail
+
+          # push events carry no `inputs`, so both may be empty.
+          NINEROUTER_TARGET="${INPUT_NINEROUTER:-master}"
+          API_TARGET="${INPUT_API:-master}"
+
+          resolve_sha() {
+            local ref="$1" repo="$2" sha
+            if [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "$ref"
+              return
+            fi
+            sha=$(git ls-remote "$repo" refs/heads/"$ref" 2>/dev/null | cut -f1)
+            if [[ -z "$sha" ]]; then
+              echo "ERROR: cannot resolve ref '$ref' in $repo" >&2
+              exit 1
+            fi
+            echo "$sha"
+          }
+
+          NINEROUTER_SHA=$(resolve_sha "$NINEROUTER_TARGET" "https://github.com/vianhanif/9router.git")
+          APIREPO_SHA=$(resolve_sha "$API_TARGET" "https://github.com/vianhanif/9router-api.git")
+
+          echo "9router=$NINEROUTER_TARGET ($NINEROUTER_SHA)"
+          echo "9router-api=$API_TARGET ($APIREPO_SHA)"
+
+          echo "ninerouter_sha=$NINEROUTER_SHA" >> "$GITHUB_OUTPUT"
+          echo "apirepo_sha=$APIREPO_SHA" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: resolve
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute test tag
+        id: tag
+        run: echo "tag=test-ghcr-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      # amd64-only on the runner — QEMU deliberately skipped.
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push 9router
+        uses: docker/build-push-action@v6
+        with:
+          context: src/9router
+          push: true
+          tags: |
+            ${{ env.IMG_9ROUTER }}:${{ steps.tag.outputs.tag }}
+            ${{ env.IMG_9ROUTER }}:test-ghcr
+          build-args: |
+            NINEROUTER_VERSION=${{ needs.resolve.outputs.ninerouter_sha }}
+          cache-from: type=gha
+
+      - name: Build & push 9router-api
+        uses: docker/build-push-action@v6
+        with:
+          context: src/9router-api
+          push: true
+          tags: |
+            ${{ env.IMG_9ROUTER_API }}:${{ steps.tag.outputs.tag }}
+            ${{ env.IMG_9ROUTER_API }}:test-ghcr
+          build-args: |
+            NINEROUTER_VERSION=${{ needs.resolve.outputs.ninerouter_sha }}
+            APIREPO_VERSION=${{ needs.resolve.outputs.apirepo_sha }}
+          cache-from: type=gha
+
+  boot-check:
+    needs: [resolve, build]
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ needs.build.outputs.tag }}
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull test images
+        run: |
+          set -euo pipefail
+          for img in "$IMG_9ROUTER" "$IMG_9ROUTER_API"; do
+            echo "pulling ${img}:${TAG}"
+            docker pull "${img}:${TAG}"
+          done
+
+      - name: Create runner-local network
+        run: |
+          set -euo pipefail
+          docker network create 9router-build-test
+
+      # ---- boot checks: one step each, pass/fail per step ----
+
+      - name: "Boot check: 9router"
+        run: |
+          docker run -d --name bt-9router \
+            --network 9router-build-test \
+            -e DATA_DIR=/app/data \
+            -e PORT=20128 \
+            -e HOSTNAME=0.0.0.0 \
+            -e NODE_ENV=production \
+            -e JWT_SECRET=build-test-dummy \
+            -e BASE_URL=http://localhost:20128 \
+            -e CLOUD_URL=http://localhost:20128 \
+            -p 127.0.0.1:20128:20128 \
+            "${IMG_9ROUTER}:${TAG}"
+
+          code=""
+          for i in $(seq 1 20); do
+            code=$(curl -s -o /tmp/9router-health.json -w '%{http_code}' http://127.0.0.1:20128/api/health || true)
+            [ "$code" = "200" ] && break
+            echo "9router not ready ($i/20) code=$code"
+            sleep 3
+          done
+          if [ "$code" != "200" ]; then
+            echo "::error::FAIL 9router /api/health returned code=${code:-none}"
+            docker logs bt-9router || true
+            exit 1
+          fi
+          # Exact payload contract: the dashboard health endpoint is {"ok":true}
+          # (any drift means the standalone build degraded).
+          if ! grep -qx '{"ok":true}' /tmp/9router-health.json; then
+            echo "::error::FAIL 9router /api/health body != {\"ok\":true}"
+            echo "got: $(cat /tmp/9router-health.json)"
+            docker logs bt-9router || true
+            exit 1
+          fi
+          echo "PASS 9router: $(cat /tmp/9router-health.json)"
+
+      - name: "Boot check: 9router-api"
+        run: |
+          docker run -d --name bt-api \
+            --network 9router-build-test \
+            -e PORT=20327 \
+            -e NODE_ENV=production \
+            -e NINEROUTER_HOME=/app/9router \
+            -e NPM_CONFIG_CACHE=/home/node/.npm \
+            -e DATA_DIR=/app/data \
+            -e JWT_SECRET=build-test-dummy \
+            -e BASE_URL=http://localhost:20128 \
+            -e CLOUD_URL=http://localhost:20128 \
+            -p 127.0.0.1:20327:20327 \
+            "${IMG_9ROUTER_API}:${TAG}"
+
+          code=""
+          for i in $(seq 1 20); do
+            code=$(curl -s -o /tmp/api-health.json -w '%{http_code}' http://127.0.0.1:20327/api/health || true)
+            [ "$code" = "200" ] && break
+            echo "9router-api not ready ($i/20) code=$code"
+            sleep 3
+          done
+          if [ "$code" != "200" ]; then
+            echo "::error::FAIL 9router-api /api/health returned code=${code:-none}"
+            docker logs bt-api || true
+            exit 1
+          fi
+          # API health payload must carry a `version` field (build/version echo).
+          if ! grep -q '"version"' /tmp/api-health.json; then
+            echo "::error::FAIL 9router-api /api/health has no \"version\" field"
+            echo "got: $(cat /tmp/api-health.json)"
+            docker logs bt-api || true
+            exit 1
+          fi
+          echo "PASS 9router-api: $(cat /tmp/api-health.json)"
+
+      # Steps are separate shells, so a single `trap ... EXIT` cannot span them;
+      # `if: always()` is the Actions equivalent — runs on pass, fail or cancel.
+      - name: Teardown test containers
+        if: always()
+        run: |
+          docker rm -f bt-9router bt-api 2>/dev/null || true
+          docker network rm 9router-build-test 2>/dev/null || true
+          echo "teardown complete"
