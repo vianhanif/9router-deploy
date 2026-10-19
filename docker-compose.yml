@@ -13,7 +13,7 @@ networks:
 
 services:
   9router:
-    build: ./src/9router
+    image: ghcr.io/vianhanif/9router-deploy/9router:latest
     container_name: 9router
     profiles: ["dashboard"]
     restart: unless-stopped
@@ -36,9 +36,7 @@ services:
       start_period: 30s
 
   9router-api:
-    build:
-      context: ./src/9router-api
-      dockerfile: Dockerfile
+    image: ghcr.io/vianhanif/9router-deploy/9router-api:latest
     container_name: 9router-api
     restart: unless-stopped
     logging: *default-logging
