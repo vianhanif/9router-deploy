@@ -83,3 +83,20 @@ Rollback for anything that fails after step 3 is automatic (local `:prev`). For 
 - `.github/workflows/ghcr-pull-test.yml` — new, VPS pull test
 - `.github/workflows/cleanup-ghcr-tags.yml` — new, monthly GHCR retention
 - `README.md` — CI/CD docs refresh
+
+## Corrections (2026-10-19, same day)
+
+- **Packages are `public`, not private.** This document assumed private GHCR
+  (500 MB free, metered). Checked after the cutover: `visibility=public` for both
+  packages, and the repo itself is public. Public packages have free storage and
+  free egress, and public repos get free Actions minutes — so none of the GHCR
+  work above was a cost saving. `GHCR_PULL_TOKEN` is retained as a defensive
+  fallback (anonymous pulls also work) rather than a requirement.
+- **`cache-to: type=gha,mode=max` is gone.** It was removed before the cutover
+  after `error writing layer blob: not_found` at 7.4 GB / 10 GB cache quota. The
+  build reads cache only.
+- **Retention is daily, not monthly**, with `RETENTION_DAYS=2` / `KEEP_NEWEST=2`
+  and a `retention_days` dispatch override. Kept for tag-list hygiene; with the
+  packages public it is not a billing control.
+- **`resolve_sha` now accepts tags** (peeling annotated tags with `^{}`), so a
+  deploy can pin `ninerouter_branch=<tag>` instead of tracking a branch tip.
