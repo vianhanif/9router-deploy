@@ -26,9 +26,12 @@ concurrency:
   group: deploy-9router
   cancel-in-progress: false
 
-# GHCR push + GitHub Actions build cache both require explicit opt-in: the repo
-# default workflow-token permission is `read`, so without this block the push
-# 403s and `cache-to: type=gha` is rejected.
+# GHCR push requires explicit opt-in: the repo default workflow-token
+# permission is `read`, so without this block the push 403s.
+# Build cache: we only READ (`cache-from: type=gha`). `cache-to: type=gha,mode=max`
+# was removed after it failed with `error writing layer blob: not_found` at
+# 7.4GB/10GB quota pressure (eviction race mid-export). Builds are ~8 min cold;
+# export isn't worth the failure mode. `actions: write` retained for future use.
 permissions:
   contents: read
   packages: write
@@ -99,7 +102,6 @@ jobs:
           build-args: |
             NINEROUTER_VERSION=${{ steps.resolve.outputs.ninerouter_sha }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
 
       - name: Build & push 9router-api
         uses: docker/build-push-action@v6
@@ -113,7 +115,6 @@ jobs:
             NINEROUTER_VERSION=${{ steps.resolve.outputs.ninerouter_sha }}
             APIREPO_VERSION=${{ steps.resolve.outputs.apirepo_sha }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
 
       - name: Sync deploy config
         uses: appleboy/scp-action@v0.1.7
