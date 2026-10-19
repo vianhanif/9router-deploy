@@ -19,13 +19,14 @@ name: cleanup-ghcr-tags
 # versions of this repo's own packages. If it is ever rejected (403), swap
 # `secrets.GITHUB_TOKEN` for a PAT secret with `delete:packages`.
 #
-# Triggers: weekly schedule + dispatch. The `schedule` entry only fires from the
+# Triggers: daily schedule + dispatch. The `schedule` entry only fires from the
 # DEFAULT branch — GitHub does not run cron on workflows that exist only on a
 # feature branch.
 
 on:
   schedule:
-    - cron: '0 3 * * 0' # weekly, Sundays @ 03:00 UTC
+    - cron: '0 3 * * *' # daily @ 03:00 UTC — must be <= RETENTION_DAYS, or
+    # versions accumulate for a full week before the cutoff can reclaim them.
   workflow_dispatch:
     inputs:
       retention_days:
