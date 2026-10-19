@@ -1,10 +1,11 @@
 name: ghcr-pull-test
 
+# Dispatch-only. A `push` trigger is intentionally NOT used: the workflow
+# would fire before `build-test.yml` has pushed the `:test-ghcr` images, so the
+# pull would always race and fail. The workflow is already registered (it has
+# run once), so `workflow_dispatch` is sufficient.
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - ".github/workflows/ghcr-pull-test.yml"
 
 permissions:
   contents: read
