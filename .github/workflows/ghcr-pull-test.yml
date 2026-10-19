@@ -1,11 +1,10 @@
 name: ghcr-pull-test
 
-# Phase-2a validation for PR #8: proves the VPS can authenticate to GHCR with
-# GHCR_PULL_TOKEN and pull the three :test-pr8 images, then cleans them up so
-# the 1.7GB VPS disk is left as found. Dispatch-only, no prod impact.
-
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/ghcr-pull-test.yml"
 
 permissions:
   contents: read
@@ -55,8 +54,6 @@ jobs:
 
             echo
             echo "=== PULL ==="
-            # Per-image status recorded instead of letting set -e abort on the
-            # first failure, so the run reports every image's verdict in one go.
             pull_fail=0
             for ref in $IMAGES; do
               echo "--- pulling $ref"
@@ -67,6 +64,7 @@ jobs:
             done
             if [ "$pull_fail" -ne 0 ]; then
               echo "ERROR: at least one pull failed"
+              exit 1
             fi
 
             echo
