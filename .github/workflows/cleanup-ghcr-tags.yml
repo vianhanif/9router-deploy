@@ -1,10 +1,15 @@
 name: cleanup-ghcr-tags
 
-# Retention policy: keep `:latest` and `:prev` forever; sha-* and test-* tags are
-# audit-only and deleted after RETENTION_DAYS. (`test-*` covers the :test-ghcr and
-# earlier :test-pr8 validation tags — without the broader prefix those never match
-# any deletion rule and linger forever.) Correctness never depends on
-# these versions existing — rollback uses the local `:prev` tag, not the registry.
+# Retention policy: keep `:latest`, `:prev` and `pr-*` forever; sha-* and test-*
+# tags are audit-only and deleted after RETENTION_DAYS. (`test-*` covers the
+# :test-ghcr and earlier :test-pr8 validation tags — without the broader prefix
+# those never match any deletion rule and linger forever.)
+#
+# Cost control: private GHCR storage is metered (500 MB free). Retention is
+# therefore tight — 2 days, and only the newest KEEP_NEWEST versions survive
+# regardless of age, so a burst of pushes cannot blow past the cutoff.
+# Correctness never depends on registry history: rollback uses the local
+# `:prev` tag on the VPS, not GHCR.
 #
 # Package paths: images are pushed as `9router-deploy/<name>`, so the REST
 # `package_name` segment must be percent-encoded (`9router-deploy%2F9router`).
@@ -14,14 +19,19 @@ name: cleanup-ghcr-tags
 # versions of this repo's own packages. If it is ever rejected (403), swap
 # `secrets.GITHUB_TOKEN` for a PAT secret with `delete:packages`.
 #
-# Triggers: schedule + dispatch. The `schedule` entry only fires from the
+# Triggers: weekly schedule + dispatch. The `schedule` entry only fires from the
 # DEFAULT branch — GitHub does not run cron on workflows that exist only on a
-# feature branch. Expected: this file activates on merge to default.
+# feature branch.
 
 on:
   schedule:
-    - cron: '0 3 1 * *' # monthly, 1st @ 03:00 UTC
+    - cron: '0 3 * * 0' # weekly, Sundays @ 03:00 UTC
   workflow_dispatch:
+    inputs:
+      retention_days:
+        description: 'Age cutoff in days. Blank = RETENTION_DAYS. 0 purges every currently eligible version.'
+        required: false
+        type: string
 
 permissions:
   packages: write
@@ -30,21 +40,27 @@ env:
   OWNER: vianhanif
   PACKAGE_NAMESPACE: 9router-deploy
   PACKAGES: 9router 9router-api
-  RETENTION_DAYS: 7
-  KEEP_NEWEST: 3 # always keep the N most recent versions, regardless of age
+  RETENTION_DAYS: 2
+  KEEP_NEWEST: 2 # always keep the N most recent versions, regardless of age
 
 jobs:
   cleanup:
     runs-on: ubuntu-latest
     steps:
-      - name: Delete stale sha-* package versions
+      - name: Delete stale package versions
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_RETENTION_DAYS: ${{ inputs.retention_days }}
         run: |
           set -euo pipefail
 
-          cutoff=$(date -u -d "-${RETENTION_DAYS} days" +%s)
-          echo "cutoff: $(date -u -d "@${cutoff}" -Is)  keep_newest: ${KEEP_NEWEST}"
+          # Dispatch may override the cutoff; blank (schedule) falls back to the
+          # repo default. 0 is valid and purges the whole eligible backlog.
+          days="${INPUT_RETENTION_DAYS:-${RETENTION_DAYS}}"
+          [[ "${days}" =~ ^[0-9]+$ ]] || { echo "::error::retention_days must be a non-negative integer, got '${days}'"; exit 1; }
+
+          cutoff=$(date -u -d "-${days} days" +%s)
+          echo "retention: ${days} day(s)  cutoff: $(date -u -d "@${cutoff}" -Is)  keep_newest: ${KEEP_NEWEST}"
 
           total=0
           skipped=0
@@ -74,7 +90,7 @@ jobs:
             echo "versions: $(jq 'add | length' /tmp/versions.json)"
 
             # Never delete a version carrying `latest`, `prev`, or a `pr-*` tag.
-            # Only consider untagged, `sha-*` (deploy audit tags) or `test-ghcr*`
+            # Only consider untagged, `sha-*` (deploy audit tags) or `test-*`
             # (build-test tags) versions, only past the cutoff, and never inside
             # the newest KEEP_NEWEST.
             jq -r --argjson cutoff "$cutoff" --argjson keep "$KEEP_NEWEST" '
