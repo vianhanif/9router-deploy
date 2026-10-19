@@ -72,7 +72,7 @@ services:
       9router-api: { condition: service_healthy }
 
   cloudflared:
-    image: cloudflare/cloudflared:2026.10.0
+    image: cloudflare/cloudflared:2026.10.1
     container_name: cloudflared
     restart: unless-stopped
     logging: *default-logging
