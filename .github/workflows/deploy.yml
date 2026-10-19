@@ -12,11 +12,11 @@ on:
   workflow_dispatch:
     inputs:
       ninerouter_branch:
-        description: "9router branch or SHA"
+        description: "9router branch, tag, or 40-char SHA"
         default: master
         required: false
       api_branch:
-        description: "9router-api branch or SHA"
+        description: "9router-api branch, tag, or 40-char SHA"
         default: master
         required: false
   repository_dispatch:
@@ -67,7 +67,16 @@ jobs:
               echo "$ref"
               return
             fi
+            # Branch wins over tag when both share a name (previous behaviour).
             sha=$(git ls-remote "$repo" refs/heads/"$ref" 2>/dev/null | cut -f1)
+            # Tag: an annotated tag resolves to the tag OBJECT, which the image
+            # build cannot check out, so peel it (`^{}`) to the commit first.
+            if [[ -z "$sha" ]]; then
+              sha=$(git ls-remote "$repo" "refs/tags/$ref^{}" 2>/dev/null | cut -f1)
+            fi
+            if [[ -z "$sha" ]]; then
+              sha=$(git ls-remote "$repo" "refs/tags/$ref" 2>/dev/null | cut -f1)
+            fi
             if [[ -z "$sha" ]]; then
               echo "ERROR: cannot resolve ref '$ref' in $repo" >&2
               exit 1
