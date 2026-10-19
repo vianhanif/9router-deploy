@@ -1,0 +1,108 @@
+name: cleanup-ghcr-tags
+
+# Retention policy: keep `:latest` and `:prev` forever; sha-* tags are
+# audit-only and deleted after RETENTION_DAYS. Correctness never depends on
+# these versions existing — rollback uses the local `:prev` tag, not the registry.
+#
+# Package paths: images are pushed as `9router-deploy/<name>`, so the REST
+# `package_name` segment must be percent-encoded (`9router-deploy%2F9router`).
+# The un-encoded `/users/{owner}/packages/container/9router/...` form 404s.
+#
+# Token: `GITHUB_TOKEN` with `permissions: packages: write` can list and delete
+# versions of this repo's own packages. If it is ever rejected (403), swap
+# `secrets.GITHUB_TOKEN` for a PAT secret with `delete:packages`.
+#
+# Triggers: schedule + dispatch. The `schedule` entry only fires from the
+# DEFAULT branch — GitHub does not run cron on workflows that exist only on a
+# feature branch. Expected: this file activates on merge to default.
+
+on:
+  schedule:
+    - cron: '0 3 1 * *' # monthly, 1st @ 03:00 UTC
+  workflow_dispatch:
+
+permissions:
+  packages: write
+
+env:
+  OWNER: vianhanif
+  PACKAGE_NAMESPACE: 9router-deploy
+  PACKAGES: 9router 9router-api
+  RETENTION_DAYS: 7
+  KEEP_NEWEST: 3 # always keep the N most recent versions, regardless of age
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete stale sha-* package versions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          cutoff=$(date -u -d "-${RETENTION_DAYS} days" +%s)
+          echo "cutoff: $(date -u -d "@${cutoff}" -Is)  keep_newest: ${KEEP_NEWEST}"
+
+          total=0
+          skipped=0
+          : > /tmp/summary.tsv
+
+          for name in $PACKAGES; do
+            pkg=$(printf '%s' "${PACKAGE_NAMESPACE}/${name}" | jq -sRr @uri)
+            path="/users/${OWNER}/packages/container/${pkg}/versions"
+            echo "::group::${PACKAGE_NAMESPACE}/${name} (${pkg})"
+
+            # A missing package is normal (not published yet) → skip. Anything
+            # else (401/403/5xx) must fail the run, never silently no-op.
+            if ! err=$(gh api --paginate --slurp "$path" 2>&1 >/tmp/versions.json); then
+              if grep -q 'HTTP 404' <<<"$err"; then
+                echo "package does not exist — skipping"
+                printf '%s\tmissing\n' "$name" >> /tmp/summary.tsv
+                skipped=$((skipped + 1))
+                echo "::endgroup::"
+                continue
+              fi
+              echo "::error::listing versions of ${name} failed (auth/permission or API error):"
+              echo "$err"
+              echo "::endgroup::"
+              exit 1
+            fi
+
+            echo "versions: $(jq 'add | length' /tmp/versions.json)"
+
+            # Never delete a version carrying `latest`, `prev`, or a `pr-*` tag.
+            # Only consider untagged, `sha-*` (deploy audit tags) or `test-ghcr*`
+            # (build-test tags) versions, only past the cutoff, and never inside
+            # the newest KEEP_NEWEST.
+            jq -r --argjson cutoff "$cutoff" --argjson keep "$KEEP_NEWEST" '
+              add
+              | sort_by(.created_at) | reverse
+              | to_entries[]
+              | select(.key >= $keep)
+              | .value
+              | (.metadata.container.tags // []) as $t
+              | select($t | any(. == "latest" or . == "prev" or startswith("pr-")) | not)
+              | select($t | length == 0 or any(startswith("sha-") or startswith("test-ghcr")))
+              | select((.created_at | fromdateiso8601) < $cutoff)
+              | "\(.id)\t\(.created_at)\t\($t | join(","))"
+            ' /tmp/versions.json > /tmp/stale.tsv
+
+            deleted=0
+            while IFS=$'\t' read -r id created tags; do
+              [ -n "$id" ] || continue
+              echo "delete id=$id created=$created tags=${tags:-<untagged>}"
+              gh api -X DELETE "${path}/${id}"
+              deleted=$((deleted + 1))
+              total=$((total + 1))
+            done < /tmp/stale.tsv
+
+            printf '%s\t%s\n' "$name" "$deleted" >> /tmp/summary.tsv
+            echo "::endgroup::"
+          done
+
+          echo "cleanup summary:"
+          while IFS=$'\t' read -r name n; do
+            printf '  %-14s %s\n' "$name" "$n"
+          done < /tmp/summary.tsv
+          echo "Deleted ${total} stale version(s); ${skipped} package(s) skipped as missing."
