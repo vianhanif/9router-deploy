@@ -26,12 +26,94 @@ concurrency:
   group: deploy-9router
   cancel-in-progress: false
 
+# GHCR push + GitHub Actions build cache both require explicit opt-in: the repo
+# default workflow-token permission is `read`, so without this block the push
+# 403s and `cache-to: type=gha` is rejected.
+permissions:
+  contents: read
+  packages: write
+  actions: write
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      IMG_9ROUTER: ghcr.io/${{ github.repository_owner }}/9router-deploy/9router
+      IMG_9ROUTER_API: ghcr.io/${{ github.repository_owner }}/9router-deploy/9router-api
 
     steps:
       - uses: actions/checkout@v4
+
+      # Source SHAs resolve on the runner (git ls-remote), not over SSH on the
+      # VPS — the image build itself also moved off the VPS with this change.
+      - name: Resolve source SHAs
+        id: resolve
+        env:
+          INPUT_NINEROUTER: ${{ github.event.inputs.ninerouter_branch }}
+          INPUT_API: ${{ github.event.inputs.api_branch }}
+        run: |
+          set -euo pipefail
+
+          # repository_dispatch carries no `inputs`, so both may be empty.
+          NINEROUTER_TARGET="${INPUT_NINEROUTER:-master}"
+          API_TARGET="${INPUT_API:-master}"
+
+          resolve_sha() {
+            local ref="$1" repo="$2" sha
+            if [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "$ref"
+              return
+            fi
+            sha=$(git ls-remote "$repo" refs/heads/"$ref" 2>/dev/null | cut -f1)
+            if [[ -z "$sha" ]]; then
+              echo "ERROR: cannot resolve ref '$ref' in $repo" >&2
+              exit 1
+            fi
+            echo "$sha"
+          }
+
+          NINEROUTER_SHA=$(resolve_sha "$NINEROUTER_TARGET" "https://github.com/vianhanif/9router.git")
+          APIREPO_SHA=$(resolve_sha "$API_TARGET" "https://github.com/vianhanif/9router-api.git")
+
+          echo "Deploying: 9router=$NINEROUTER_TARGET ($NINEROUTER_SHA), 9router-api=$API_TARGET ($APIREPO_SHA)"
+
+          echo "ninerouter_sha=$NINEROUTER_SHA" >> "$GITHUB_OUTPUT"
+          echo "apirepo_sha=$APIREPO_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Builds run on the GitHub runner: 2 vCPU/7 GB instead of the 1.7 GB VPS,
+      # and they no longer serialize behind the 30–60 m SSH timeouts the on-VPS
+      # build used to hit. Runner BuildKit cache is bounded by GHA cache itself
+      # (type=gha,mode=max); the VPS-side 3G builder-prune cap still applies to
+      # the VPS-local builds that preview.yml and manual rebuilds perform.
+      - name: Build & push 9router
+        uses: docker/build-push-action@v6
+        with:
+          context: src/9router
+          push: true
+          tags: |
+            ${{ env.IMG_9ROUTER }}:sha-${{ steps.resolve.outputs.ninerouter_sha }}
+            ${{ env.IMG_9ROUTER }}:latest
+          build-args: |
+            NINEROUTER_VERSION=${{ steps.resolve.outputs.ninerouter_sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build & push 9router-api
+        uses: docker/build-push-action@v6
+        with:
+          context: src/9router-api
+          push: true
+          tags: |
+            ${{ env.IMG_9ROUTER_API }}:sha-${{ steps.resolve.outputs.apirepo_sha }}
+            ${{ env.IMG_9ROUTER_API }}:latest
+          build-args: |
+            NINEROUTER_VERSION=${{ steps.resolve.outputs.ninerouter_sha }}
+            APIREPO_VERSION=${{ steps.resolve.outputs.apirepo_sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Sync deploy config
         uses: appleboy/scp-action@v0.1.7
@@ -42,49 +124,29 @@ jobs:
           source: "docker-compose.yml,proxy/Caddyfile,src/9router/Dockerfile,src/9router-api/Dockerfile"
           target: /opt/9router
 
-      - name: Build new images
+      # GHCR packages are private, so the VPS must authenticate before ANY pull
+      # (smoke's implicit pull of the SHA-tagged refs included). The login
+      # persists in /root/.docker/config.json on the VPS for the later
+      # ssh-action steps of this job (each step is a separate connection, so the
+      # credential cannot be scoped to one step without re-logging in each time).
+      # `docker logout` runs as the final step of this job.
+      - name: Login to GHCR on VPS
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
         with:
           host: ${{ secrets.TENCENT_HOST }}
           username: ${{ secrets.TENCENT_USER }}
           key: ${{ secrets.TENCENT_SSH_KEY }}
-          command_timeout: 30m
+          envs: GHCR_PULL_TOKEN
           script: |
             set -e
-            cd /opt/9router
-
-            INPUT_NINEROUTER="${{ github.event.inputs.ninerouter_branch }}"
-            INPUT_API="${{ github.event.inputs.api_branch }}"
-
-            NINEROUTER_TARGET="${INPUT_NINEROUTER:-master}"
-            API_TARGET="${INPUT_API:-master}"
-
-            docker tag 9router-9router:latest 9router-9router:prev 2>/dev/null || true
-            docker tag 9router-9router-api:latest 9router-9router-api:prev 2>/dev/null || true
-
-            resolve_sha() {
-              local ref="$1" repo="$2" sha
-              if [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
-                echo "$ref"
-                return
-              fi
-              sha=$(git ls-remote "$repo" refs/heads/"$ref" 2>/dev/null | cut -f1)
-              if [[ -z "$sha" ]]; then
-                echo "ERROR: cannot resolve ref '$ref' in $repo" >&2
-                exit 1
-              fi
-              echo "$sha"
-            }
-
-            NINEROUTER_SHA=$(resolve_sha "$NINEROUTER_TARGET" "https://github.com/vianhanif/9router.git")
-            APIREPO_SHA=$(resolve_sha "$API_TARGET" "https://github.com/vianhanif/9router-api.git")
-
-            echo "Deploying: 9router=$NINEROUTER_TARGET ($NINEROUTER_SHA), 9router-api=$API_TARGET ($APIREPO_SHA)"
-
-            docker compose build \
-              --build-arg NINEROUTER_VERSION=$NINEROUTER_SHA \
-              --build-arg APIREPO_VERSION=$APIREPO_SHA \
-              9router 9router-api
+            if [ -z "${GHCR_PULL_TOKEN}" ]; then
+              echo "ERROR: secret GHCR_PULL_TOKEN is empty — create it (classic PAT, read:packages)"
+              exit 1
+            fi
+            echo "${GHCR_PULL_TOKEN}" | docker login ghcr.io \
+              -u "${{ github.repository_owner }}" --password-stdin
 
       - name: Smoke test new images
         uses: appleboy/ssh-action@v1.0.3
@@ -111,6 +173,9 @@ jobs:
 
             echo "Starting isolated stack for smoke validation..."
 
+            # Smoke the SHA-tagged refs, NOT `:latest`: the implicit pull on
+            # `docker run` would otherwise overwrite the local `:latest` that the
+            # switch step is about to capture as `:prev` for rollback.
             # 1. Start Dashboard with exact configuration parameters.
             #    Ports bind to 127.0.0.1 only so the throwaway instance is never
             #    exposed on the VPS public interface.
@@ -118,7 +183,7 @@ jobs:
               --env-file ./env/9router.env -e PORT=20328 \
               -p 127.0.0.1:20328:20328 \
               -v /opt/9router/data/9router:/app/data -v /opt/9router/data-home/9router-home:/app/data-home \
-              9router-9router:latest
+              ${{ env.IMG_9ROUTER }}:sha-${{ steps.resolve.outputs.ninerouter_sha }}
 
             echo "Awaiting dashboard boot up at ${DASHBOARD_URL}..."
             for i in $(seq 1 20); do
@@ -137,7 +202,7 @@ jobs:
               --env-file ./env/9router-api.env -e PORT=20327 \
               -p 127.0.0.1:20327:20327 \
               -v /opt/9router/data/9router:/app/data -v /opt/9router/data-home/9router-home:/app/data-home \
-              9router-9router-api:latest
+              ${{ env.IMG_9ROUTER_API }}:sha-${{ steps.resolve.outputs.apirepo_sha }}
 
             echo "Awaiting api gateway boot up at ${API_URL}..."
             for i in $(seq 1 20); do
@@ -175,6 +240,35 @@ jobs:
           script: |
             set -e
             cd /opt/9router
+
+            # Capture the currently-running images as `:prev` BEFORE pulling, so
+            # a failed switch can roll back from local images with NO registry
+            # access. (Smoke used SHA-tagged refs, so local `:latest` is still
+            # the old image.) On the very first post-cutover deploy the ghcr
+            # `:latest` tag does not exist locally yet — fall back to the image
+            # the production container actually runs (pre-cutover compose-built
+            # name), so rollback works from day one.
+            capture_prev() {
+              local svc="$1" ref="$2" img
+              if docker image inspect "$ref:latest" >/dev/null 2>&1; then
+                img="$ref:latest"
+              else
+                img=$(docker inspect -f '{{.Config.Image}}' "$svc" 2>/dev/null || true)
+              fi
+              if [ -n "$img" ] && docker image inspect "$img" >/dev/null 2>&1; then
+                docker tag "$img" "$ref:prev"
+                echo "captured $img -> $ref:prev"
+              else
+                echo "WARN: nothing to capture as $ref:prev (fresh VPS?)"
+              fi
+            }
+            capture_prev 9router "${{ env.IMG_9ROUTER }}"
+            capture_prev 9router-api "${{ env.IMG_9ROUTER_API }}"
+
+            echo "Pulling new images from GHCR..."
+            # 9router is profile-gated, so a bare `pull` would skip it; list the
+            # services explicitly and activate the profile.
+            docker compose --profile dashboard pull 9router 9router-api
 
             echo "Starting production stack..."
 
@@ -250,16 +344,28 @@ jobs:
             docker rm -f smoke-9router smoke-api >/dev/null 2>&1 || true
             # 2. Restore previous images (if any) so production keeps running.
             #    Only recreate when :latest actually diverged from :prev — a
-            #    failure before the build produced a new image leaves production
-            #    untouched and must not trigger an ingress blip.
+            #    failure before the build/pull produced a new image leaves
+            #    production untouched and must not trigger an ingress blip.
+            #    Works with no registry access: :prev was captured locally.
             NEED_RECREATE=0
-            for svc in 9router-9router 9router-9router-api; do
-              if docker image inspect "$svc:prev" >/dev/null 2>&1; then
-                CUR_ID=$(docker image inspect "$svc:latest" --format '{{.Id}}' 2>/dev/null || true)
-                PREV_ID=$(docker image inspect "$svc:prev" --format '{{.Id}}')
+            for ref in "${{ env.IMG_9ROUTER }}" "${{ env.IMG_9ROUTER_API }}"; do
+              if docker image inspect "$ref:prev" >/dev/null 2>&1; then
+                if ! docker image inspect "$ref:latest" >/dev/null 2>&1; then
+                  # Pre-cutover / pre-pull failure: production still runs its
+                  # current image and no ghcr :latest exists locally.
+                  echo "No local $ref:latest yet — production untouched, nothing to restore."
+                  continue
+                fi
+                CUR_ID=$(docker image inspect "$ref:latest" --format '{{.Id}}')
+                PREV_ID=$(docker image inspect "$ref:prev" --format '{{.Id}}')
                 if [ "$CUR_ID" != "$PREV_ID" ]; then
-                  echo "Restoring $svc:prev -> $svc:latest"
-                  docker tag "$svc:prev" "$svc:latest"
+                  echo "Restoring $ref:prev -> $ref:latest"
+                  docker tag "$ref:prev" "$ref:latest"
+                  # The failed pull's image is now untagged; drop its body too
+                  # (no com.docker.compose.project label on pulled images, so
+                  # the label-scoped dangling prune below cannot reclaim it).
+                  # Safe: refuses while a container still references it.
+                  docker image rm "$CUR_ID" 2>/dev/null || true
                   NEED_RECREATE=1
                 fi
               fi
@@ -289,8 +395,45 @@ jobs:
           username: ${{ secrets.TENCENT_USER }}
           key: ${{ secrets.TENCENT_SSH_KEY }}
           script: |
+            set -e
+            IMG_9ROUTER="${{ env.IMG_9ROUTER }}"
+            IMG_9ROUTER_API="${{ env.IMG_9ROUTER_API }}"
+
+            # Record the image ids behind `:prev` BEFORE untagging them: re-pointing
+            # `:prev` next deploy would orphan these bodies silently, and pulled GHCR
+            # images carry no `com.docker.compose.project` label, so the label-scoped
+            # dangling prune below can never match them. Deleting by id afterwards is
+            # refused by Docker (safe no-op) while the id is still tagged or in use.
+            OLD_IDS=""
+            for ref in "$IMG_9ROUTER" "$IMG_9ROUTER_API"; do
+              id=$(docker image inspect "$ref:prev" --format '{{.Id}}' 2>/dev/null || true)
+              [ -n "$id" ] && OLD_IDS="$OLD_IDS $id"
+            done
+
             # Scoped to this project's own image refs — safe on a shared daemon.
-            docker rmi 9router-9router:prev 9router-9router-api:prev 2>/dev/null || true
+            docker rmi "$IMG_9ROUTER:prev" "$IMG_9ROUTER_API:prev" 2>/dev/null || true
+
+            # Smoke-test `:sha-*` tags accumulate locally (one per deploy) — the
+            # content they pin is also tagged `:latest`, so dropping them loses
+            # nothing. NOTE: `docker image prune` supports only `until=` and
+            # `label=` filters — there is NO `reference=` filter. Use
+            # `docker image ls --filter reference=` (which supports globs).
+            for ref in "$IMG_9ROUTER" "$IMG_9ROUTER_API"; do
+              docker image ls --format '{{.Repository}}:{{.Tag}}' \
+                --filter "reference=${ref}:sha-*" \
+                | xargs -r docker rmi 2>/dev/null || true
+            done
+
+            # Pre-cutover compose-built image names (build: era). Refused while a
+            # container still uses them (failed first cutover) — safe no-op then.
+            docker rmi 9router-9router:latest 9router-9router-api:latest 2>/dev/null || true
+
+            # Now delete the untagged old image bodies recorded above. Still tagged
+            # (rollback restored it) or referenced → Docker refuses; `|| true`.
+            for id in $OLD_IDS; do
+              docker image rm "$id" 2>/dev/null || true
+            done
+
             # Project label scoping keeps co-located stacks (opencode-sandbox) on
             # this shared daemon safe. No `until=24h` floor: freshly built images
             # are <24h old, so the age filter matched nothing and this step
@@ -305,6 +448,21 @@ jobs:
             # matches nothing and the cap never bites — cache drifted to ~6GB
             # (measured on the VPS) while nominally "capped" at 3G. The cap alone
             # keeps the most-recent 3G hot (warm deploys, no cold-rebuild OOM)
-            # and actually enforces the ceiling.
+            # and actually enforces the ceiling. Production no longer builds on
+            # the VPS, but preview.yml and manual rebuilds still do — the cap
+            # protects those and the co-located stacks.
             # (Was `--keep-storage`; deprecated in Docker CLI 27.5.1, same semantics.)
             docker builder prune -f --max-used-space 3G
+
+      - name: Logout GHCR on VPS
+        # Credentials must not outlive the deploy: every job re-logins before
+        # its first pull. Failures here never fail an otherwise-green deploy.
+        if: always()
+        continue-on-error: true
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.TENCENT_HOST }}
+          username: ${{ secrets.TENCENT_USER }}
+          key: ${{ secrets.TENCENT_SSH_KEY }}
+          script: |
+            docker logout ghcr.io 2>/dev/null || true
