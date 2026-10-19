@@ -5,8 +5,11 @@ name: cleanup-ghcr-tags
 # :test-ghcr and earlier :test-pr8 validation tags — without the broader prefix
 # those never match any deletion rule and linger forever.)
 #
-# Cost control: private GHCR storage is metered (500 MB free). Retention is
-# therefore tight — 2 days, and only the newest KEEP_NEWEST versions survive
+# Cost control: GHCR storage is metered only for PRIVATE packages (500 MB free).
+# These packages are public, so both storage and egress are free — retention here
+# is hygiene (a bounded tag list, not a bill). If visibility is ever flipped to
+# private, this retention is what keeps that change from becoming expensive.
+# Retention is tight — 2 days, and only the newest KEEP_NEWEST versions survive
 # regardless of age, so a burst of pushes cannot blow past the cutoff.
 # Correctness never depends on registry history: rollback uses the local
 # `:prev` tag on the VPS, not GHCR.
