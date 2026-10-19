@@ -1,7 +1,9 @@
 name: cleanup-ghcr-tags
 
-# Retention policy: keep `:latest` and `:prev` forever; sha-* tags are
-# audit-only and deleted after RETENTION_DAYS. Correctness never depends on
+# Retention policy: keep `:latest` and `:prev` forever; sha-* and test-* tags are
+# audit-only and deleted after RETENTION_DAYS. (`test-*` covers the :test-ghcr and
+# earlier :test-pr8 validation tags — without the broader prefix those never match
+# any deletion rule and linger forever.) Correctness never depends on
 # these versions existing — rollback uses the local `:prev` tag, not the registry.
 #
 # Package paths: images are pushed as `9router-deploy/<name>`, so the REST
@@ -83,7 +85,7 @@ jobs:
               | .value
               | (.metadata.container.tags // []) as $t
               | select($t | any(. == "latest" or . == "prev" or startswith("pr-")) | not)
-              | select($t | length == 0 or any(startswith("sha-") or startswith("test-ghcr")))
+              | select($t | length == 0 or any(startswith("sha-") or startswith("test-")))
               | select((.created_at | fromdateiso8601) < $cutoff)
               | "\(.id)\t\(.created_at)\t\($t | join(","))"
             ' /tmp/versions.json > /tmp/stale.tsv
