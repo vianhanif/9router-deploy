@@ -180,14 +180,14 @@ The workflow `.github/workflows/deploy.yml` deploys on:
 | `TENCENT_HOST` | Deployment server hostname/IP |
 | `TENCENT_USER` | SSH username |
 | `TENCENT_SSH_KEY` | SSH private key for deployment |
-| `GHCR_PULL_TOKEN` | Classic PAT with `read:packages` — lets the VPS pull the private images from GHCR |
+| `GHCR_PULL_TOKEN` | Classic PAT with `read:packages`. The GHCR packages are **public**, so anonymous pulls also work; the token is kept as a defensive fallback if visibility is ever flipped to private. The step fails loudly when the secret is empty |
 
-Images are built on GitHub-hosted runners and pushed to the private GitHub Container Registry (`ghcr.io/vianhanif/9router-deploy/{9router,9router-api}`), not on the VPS. The workflow job carries an explicit `permissions:` block (`contents: read`, `packages: write`, `actions: write`) because the repository's default workflow-token permission is read-only.
+Images are built on GitHub-hosted runners and pushed to the **public** GitHub Container Registry (`ghcr.io/vianhanif/9router-deploy/{9router,9router-api}`), not on the VPS. Public visibility makes storage and egress free. The workflow job carries an explicit `permissions:` block (`contents: read`, `packages: write`, `actions: write`) because the repository's default workflow-token permission is read-only.
 
 **Pipeline steps:**
 
-1. **Resolve source SHAs** — resolves the `9router` / `9router-api` refs to commit SHAs (`repository_dispatch` carries no inputs and falls back to `master`).
-2. **Build & push** — `docker/build-push-action` builds `9router` and `9router-api` on the runner, pushing `:latest` plus a `:sha-<sha>` audit tag to GHCR with GitHub Actions build cache (`type=gha,mode=max`).
+1. **Resolve source SHAs** — resolves the `9router` / `9router-api` refs to commit SHAs. Accepts a branch, a **tag**, or a literal 40-char SHA; `repository_dispatch` carries no inputs and falls back to `master`. Annotated tags are peeled (`^{}`) to the commit, since the image build cannot check out a tag object.
+2. **Build & push** — `docker/build-push-action` builds `9router` and `9router-api` on the runner, pushing `:latest` plus a `:sha-<sha>` audit tag to GHCR. Build cache is read-only (`cache-from: type=gha`); `cache-to` was removed after it failed at the 10 GB cache quota.
 3. **Sync config** — copies `docker-compose.yml`, `proxy/Caddyfile`, and both Dockerfiles to `/opt/9router` via SCP (the Dockerfiles stay on the host for the manual-rebuild fallback).
 4. **Login to GHCR** — the VPS authenticates with `GHCR_PULL_TOKEN` before any pull; the step fails loudly when the secret is empty, and the job logs out again at the end.
 5. **Smoke test** — runs each new image on scratch ports (`20328`/`20327`) and verifies `/api/health` plus the `/v1/responses` route. It pulls the SHA-tagged refs, so the implicit pull does not disturb the running `:latest` that `:prev` is about to be captured from. The deploy aborts if any check fails.
@@ -202,7 +202,7 @@ Images are built on GitHub-hosted runners and pushed to the private GitHub Conta
 |---|---|---|
 | `build-test.yml` | `workflow_dispatch`, push (paths `src/**`, `docker-compose*.yml`, workflows) | Builds both images on a runner, pushes the test tags `:test-ghcr-<sha>` / `:test-ghcr`, and boot-checks them on the runner — no VPS contact, no production impact |
 | `ghcr-pull-test.yml` | `workflow_dispatch`, push (path: itself) | Pulls the `:test-ghcr` images on the VPS, reports disk usage before/after, then removes them again |
-| `cleanup-ghcr-tags.yml` | `schedule` (monthly), `workflow_dispatch` | Deletes stale `sha-*` / `test-ghcr*` package versions; `latest`, `prev` and `pr-*` are never deleted. Schedules only run from the default branch, so it activates once merged |
+| `cleanup-ghcr-tags.yml` | `schedule` (daily), `workflow_dispatch` (`retention_days` override) | Deletes stale `sha-*` / `test-*` / untagged package versions older than `RETENTION_DAYS` (2), keeping at least `KEEP_NEWEST` (2); `latest`, `prev` and `pr-*` are never deleted. Schedules only run from the default branch |
 
 ### Preview deployments (non-master branches)
 
