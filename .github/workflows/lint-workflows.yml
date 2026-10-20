@@ -1,0 +1,49 @@
+name: lint-workflows
+
+# Catches invalid workflow YAML *before* merge.
+#
+# Why this exists: a change that put `timeout-minutes` at the workflow level
+# (it is job-level only) made deploy.yml unparseable. It passed `ruby -ryaml`
+# and every other YAML check, merged-review-wise looked fine, and GitHub only
+# rejected it at runtime with "workflow file issue" and zero jobs. A YAML
+# parser cannot tell a valid workflow from a valid YAML document; actionlint
+# can.
+#
+# Scoped to workflow paths only, so it never competes with the image builds in
+# build-test.yml for runner time.
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+  push:
+    branches: [ master ]
+    paths:
+      - '.github/workflows/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lint-workflows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  actionlint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      # Pinned tarball rather than a third-party action or curl|bash of an
+      # installer script from `main`: one auditable artifact, no version drift.
+      - name: actionlint
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+        run: |
+          set -euo pipefail
+          url="https://github.com/rhysd/actionlint/releases/download"
+          url="$url/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -sSfL -o /tmp/actionlint.tgz "$url"
+          tar -xzf /tmp/actionlint.tgz -C /tmp actionlint
+          /tmp/actionlint -color
