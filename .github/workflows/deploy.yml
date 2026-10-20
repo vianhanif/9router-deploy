@@ -162,7 +162,7 @@ jobs:
       # credential cannot be scoped to one step without re-logging in each time).
       # `docker logout` runs as the final step of this job.
       - name: Login to GHCR on VPS
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         env:
           GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
         with:
@@ -180,7 +180,7 @@ jobs:
               -u "${{ github.repository_owner }}" --password-stdin
 
       - name: Smoke test new images
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.TENCENT_HOST }}
           username: ${{ secrets.TENCENT_USER }}
@@ -262,7 +262,7 @@ jobs:
             echo "SMOKE TEST PASSED SUCCESSFULLY"
 
       - name: Switch to new images & verify
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.TENCENT_HOST }}
           username: ${{ secrets.TENCENT_USER }}
@@ -361,7 +361,7 @@ jobs:
 
       - name: Rollback on failure (any prior step failed)
         if: failure()
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.TENCENT_HOST }}
           username: ${{ secrets.TENCENT_USER }}
@@ -420,7 +420,7 @@ jobs:
         # image leak). Must stay AFTER the rollback step: rollback reads `:prev`
         # tags, and this step deletes them.
         if: ${{ !cancelled() }}
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.TENCENT_HOST }}
           username: ${{ secrets.TENCENT_USER }}
@@ -490,7 +490,7 @@ jobs:
         # its first pull. Failures here never fail an otherwise-green deploy.
         if: always()
         continue-on-error: true
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.TENCENT_HOST }}
           username: ${{ secrets.TENCENT_USER }}
