@@ -155,8 +155,13 @@ jobs:
           source: "docker-compose.yml,proxy/Caddyfile,src/9router/Dockerfile,src/9router-api/Dockerfile"
           target: /opt/9router
 
-      # GHCR packages are private, so the VPS must authenticate before ANY pull
-      # (smoke's implicit pull of the SHA-tagged refs included). The login
+      # The GHCR packages are public, so this login is not strictly required —
+      # anonymous pulls work. It is kept as a fallback so the VPS still deploys
+      # if visibility is ever flipped to private, and it fails loudly when
+      # GHCR_PULL_TOKEN is empty rather than silently relying on anonymity.
+      #
+      # Ordering matters: the VPS must be authenticated before ANY pull, the
+      # smoke test's implicit pull of the SHA-tagged refs included. The login
       # persists in /root/.docker/config.json on the VPS for the later
       # ssh-action steps of this job (each step is a separate connection, so the
       # credential cannot be scoped to one step without re-logging in each time).
