@@ -16,3 +16,28 @@ updates:
       docker-compose:
         patterns:
           - "*"
+
+  # Keeps the `uses:` pins in .github/workflows/*.yml current. Without this
+  # entry they rot silently until GitHub refuses an action's Node runtime.
+  # PR-only: never auto-merges, and deploy.yml's smoke gate validates any bump
+  # that reaches master.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    labels:
+      - dependencies
+    groups:
+      # Minor/patch bumps are low-risk and arrive in one PR. Majors come
+      # individually so they can be read first — `appleboy/scp-action@0.1.7` is
+      # pre-1.0 and its 1.0.0 renamed inputs, and both appleboy actions carry
+      # the production deploy path (VPS SSH + SCP).
+      actions-minor:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
