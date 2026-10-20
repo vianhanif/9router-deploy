@@ -29,15 +29,16 @@ concurrency:
 # Build cache: we only READ (`cache-from: type=gha`). `cache-to: type=gha,mode=max`
 # was removed after it failed with `error writing layer blob: not_found` at
 # 7.4GB/10GB quota pressure (eviction race mid-export). Builds are ~8 min cold;
-# export isn't worth the failure mode. `actions: write` retained for future use.
+# export isn't worth the failure mode. Reading a cache needs no scope, so
+# `actions: write` is NOT requested — least privilege: contents + packages only.
 permissions:
   contents: read
   packages: write
-  actions: write
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       IMG_9ROUTER: ghcr.io/${{ github.repository_owner }}/9router-deploy/9router
       IMG_9ROUTER_API: ghcr.io/${{ github.repository_owner }}/9router-deploy/9router-api

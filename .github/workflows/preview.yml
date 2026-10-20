@@ -31,6 +31,9 @@ on:
   repository_dispatch:
     types: [preview]
 
+permissions:
+  contents: read
+
 concurrency:
   group: preview-9router-deploy
   cancel-in-progress: false
@@ -38,6 +41,7 @@ concurrency:
 jobs:
   preview:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v7
