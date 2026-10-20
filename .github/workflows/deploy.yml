@@ -56,7 +56,7 @@ jobs:
       PIN_9ROUTER_API: v0.5.104
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Source SHAs resolve on the runner (git ls-remote), not over SSH on the
       # VPS — the image build itself also moved off the VPS with this change.
@@ -105,12 +105,12 @@ jobs:
           echo "apirepo_sha=$APIREPO_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       # The runner build/push MUST authenticate explicitly: `packages: write`
       # alone leaves the registry token exchange anonymous, which 403s.
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -122,7 +122,7 @@ jobs:
       # (type=gha,mode=max); the VPS-side 3G builder-prune cap still applies to
       # the VPS-local builds that preview.yml and manual rebuilds perform.
       - name: Build & push 9router
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: src/9router
           push: true
@@ -134,7 +134,7 @@ jobs:
           cache-from: type=gha
 
       - name: Build & push 9router-api
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: src/9router-api
           push: true
@@ -147,7 +147,7 @@ jobs:
           cache-from: type=gha
 
       - name: Sync deploy config
-        uses: appleboy/scp-action@v0.1.7
+        uses: appleboy/scp-action@v1.0.0
         with:
           host: ${{ secrets.TENCENT_HOST }}
           username: ${{ secrets.TENCENT_USER }}
@@ -162,7 +162,7 @@ jobs:
       # credential cannot be scoped to one step without re-logging in each time).
       # `docker logout` runs as the final step of this job.
       - name: Login to GHCR on VPS
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         env:
           GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
         with:
@@ -180,7 +180,7 @@ jobs:
               -u "${{ github.repository_owner }}" --password-stdin
 
       - name: Smoke test new images
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.TENCENT_HOST }}
           username: ${{ secrets.TENCENT_USER }}
@@ -262,7 +262,7 @@ jobs:
             echo "SMOKE TEST PASSED SUCCESSFULLY"
 
       - name: Switch to new images & verify
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.TENCENT_HOST }}
           username: ${{ secrets.TENCENT_USER }}
@@ -361,7 +361,7 @@ jobs:
 
       - name: Rollback on failure (any prior step failed)
         if: failure()
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.TENCENT_HOST }}
           username: ${{ secrets.TENCENT_USER }}
@@ -420,7 +420,7 @@ jobs:
         # image leak). Must stay AFTER the rollback step: rollback reads `:prev`
         # tags, and this step deletes them.
         if: ${{ !cancelled() }}
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.TENCENT_HOST }}
           username: ${{ secrets.TENCENT_USER }}
@@ -490,7 +490,7 @@ jobs:
         # its first pull. Failures here never fail an otherwise-green deploy.
         if: always()
         continue-on-error: true
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.TENCENT_HOST }}
           username: ${{ secrets.TENCENT_USER }}
