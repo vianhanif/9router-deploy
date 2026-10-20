@@ -12,12 +12,10 @@ on:
   workflow_dispatch:
     inputs:
       ninerouter_branch:
-        description: "9router branch, tag, or 40-char SHA"
-        default: master
+        description: "9router branch, tag, or 40-char SHA. Blank = the pinned release (see PIN_9ROUTER)."
         required: false
       api_branch:
-        description: "9router-api branch, tag, or 40-char SHA"
-        default: master
+        description: "9router-api branch, tag, or 40-char SHA. Blank = the pinned release (see PIN_9ROUTER_API)."
         required: false
   repository_dispatch:
     types: [ deploy ]
@@ -43,6 +41,19 @@ jobs:
     env:
       IMG_9ROUTER: ghcr.io/${{ github.repository_owner }}/9router-deploy/9router
       IMG_9ROUTER_API: ghcr.io/${{ github.repository_owner }}/9router-deploy/9router-api
+      # ── Production pin ──────────────────────────────────────────────────
+      # The default deploy target. Advances ONLY when these change in a
+      # reviewed PR, or when a dispatch passes an explicit ref.
+      #
+      # Why a tag and not `master`: both source repos are separate, so a merge
+      # landing in either one was shipping to prod on the next deploy of the
+      # *other* repo. The pin decouples "merge code" from "ship code".
+      #
+      # Bumping: cut a new tag in the source repo, then update the value here.
+      # Never move an existing tag forward — that rewrites what a prior deploy
+      # shipped. Both repos must be tagged; resolve_sha fails loudly otherwise.
+      PIN_9ROUTER: v0.5.104
+      PIN_9ROUTER_API: v0.5.104
 
     steps:
       - uses: actions/checkout@v4
@@ -57,9 +68,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          # repository_dispatch carries no `inputs`, so both may be empty.
-          NINEROUTER_TARGET="${INPUT_NINEROUTER:-master}"
-          API_TARGET="${INPUT_API:-master}"
+          # repository_dispatch carries no `inputs`, so both may be empty —
+          # blank means "deploy the pinned release", not "deploy master".
+          NINEROUTER_TARGET="${INPUT_NINEROUTER:-$PIN_9ROUTER}"
+          API_TARGET="${INPUT_API:-$PIN_9ROUTER_API}"
 
           resolve_sha() {
             local ref="$1" repo="$2" sha
