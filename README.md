@@ -186,7 +186,7 @@ Images are built on GitHub-hosted runners and pushed to the **public** GitHub Co
 
 **Pipeline steps:**
 
-1. **Resolve source SHAs** — resolves the `9router` / `9router-api` refs to commit SHAs. Accepts a branch, a **tag**, or a literal 40-char SHA; `repository_dispatch` carries no inputs and falls back to `master`. Annotated tags are peeled (`^{}`) to the commit, since the image build cannot check out a tag object.
+1. **Resolve source SHAs** — resolves the `9router` / `9router-api` refs to commit SHAs. Accepts a branch, a **tag**, or a literal 40-char SHA. `repository_dispatch` (and a blank `workflow_dispatch`) falls back to the **pinned release** (`PIN_9ROUTER` / `PIN_9ROUTER_API`, currently `v0.5.104`). Annotated tags are peeled (`^{}`) to the commit, since the image build cannot check out a tag object.
 2. **Build & push** — `docker/build-push-action` builds `9router` and `9router-api` on the runner, pushing `:latest` plus a `:sha-<sha>` audit tag to GHCR. Build cache is read-only (`cache-from: type=gha`); `cache-to` was removed after it failed at the 10 GB cache quota.
 3. **Sync config** — copies `docker-compose.yml`, `proxy/Caddyfile`, and both Dockerfiles to `/opt/9router` via SCP (the Dockerfiles stay on the host for the manual-rebuild fallback).
 4. **Login to GHCR** — the VPS authenticates with `GHCR_PULL_TOKEN` before any pull; the step fails loudly when the secret is empty, and the job logs out again at the end.
