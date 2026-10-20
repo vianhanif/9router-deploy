@@ -33,11 +33,14 @@ concurrency:
   group: build-test
   cancel-in-progress: true
 
-# GHCR push + GHA cache both need explicit opt-in (repo default token is read).
+# GHCR push needs explicit opt-in (repo default token is read). Caching is
+# read-only (`cache-from`), so `actions: write` is not requested — least
+# privilege: contents + packages only.
 permissions:
   contents: read
   packages: write
-  actions: write
+
+timeout-minutes: 30
 
 env:
   IMG_9ROUTER: ghcr.io/${{ github.repository_owner }}/9router-deploy/9router

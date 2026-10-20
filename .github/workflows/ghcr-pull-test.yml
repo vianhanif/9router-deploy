@@ -17,6 +17,7 @@ concurrency:
 jobs:
   pull:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Pull test images on VPS
         uses: appleboy/ssh-action@v1.2.5
