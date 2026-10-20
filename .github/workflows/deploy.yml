@@ -147,7 +147,7 @@ jobs:
           cache-from: type=gha
 
       - name: Sync deploy config
-        uses: appleboy/scp-action@v0.1.7
+        uses: appleboy/scp-action@v1.0.0
         with:
           host: ${{ secrets.TENCENT_HOST }}
           username: ${{ secrets.TENCENT_USER }}
