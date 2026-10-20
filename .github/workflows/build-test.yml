@@ -40,8 +40,6 @@ permissions:
   contents: read
   packages: write
 
-timeout-minutes: 30
-
 env:
   IMG_9ROUTER: ghcr.io/${{ github.repository_owner }}/9router-deploy/9router
   IMG_9ROUTER_API: ghcr.io/${{ github.repository_owner }}/9router-deploy/9router-api
@@ -49,6 +47,7 @@ env:
 jobs:
   resolve:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       ninerouter_sha: ${{ steps.resolve.outputs.ninerouter_sha }}
       apirepo_sha: ${{ steps.resolve.outputs.apirepo_sha }}
@@ -91,6 +90,7 @@ jobs:
   build:
     needs: resolve
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
     steps:
@@ -139,6 +139,7 @@ jobs:
   boot-check:
     needs: [resolve, build]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       TAG: ${{ needs.build.outputs.tag }}
     steps:

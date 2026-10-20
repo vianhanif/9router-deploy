@@ -1,10 +1,24 @@
 # 20261020-ROUTER-013 — Close repo-level security and CI hardening gaps
 
-**Status:** complete
-**Scope:** GitHub repo settings (API) + `.github/workflows/*.yml`. No deploy-path
-behaviour change.
+**Status:** complete, after one self-inflicted outage (see "Correction" below)
+**Scope:** GitHub repo settings (ruleset + security APIs) + `.github/workflows/*.yml`.
 
-An audit prompted by "all best practices completed?" found seven gaps. All closed.
+An audit prompted by "all best practices completed?" found seven gaps. Two of my
+own audit claims were wrong and one fix broke three workflows; all are recorded
+here rather than quietly corrected.
+
+### Verified state (re-queried, not assumed)
+
+| Item | Result |
+|---|---|
+| Secret scanning | `enabled` |
+| Push protection | `enabled` |
+| Dependabot security updates | `enabled` |
+| `delete_branch_on_merge` | `true` |
+| Ruleset `master` (23709088) | `active`, rules: `deletion`, `non_fast_forward`, **`pull_request`** |
+| `actions: write` in any workflow | absent |
+| Top-level `timeout-minutes` in any workflow | absent |
+| `actionlint` on all five workflows | no errors |
 
 ## Repo settings (applied via API, no PR needed)
 
@@ -15,16 +29,34 @@ policy in this repo — "never push directly to master", "feature branches + PRs
 only" — was a convention with nothing enforcing it. A direct
 `git push origin master` would have succeeded and shipped to production.
 
-Now protected:
+**This repo uses a ruleset, not classic branch protection.** Classic protection
+returns 404 regardless; the API that governs `master` is:
 
-| Setting | Value | Why |
+```
+GET /repos/vianhanif/9router-deploy/rulesets
+→ id=23709088 name=master target=branch enforcement=active
+  rules: deletion, non_fast_forward
+  conditions: ref_name.include = ["~DEFAULT_BRANCH"]
+  bypass_actors: []
+```
+
+So deletion and force-push on `master` were **already blocked** before this work
+— a real safeguard that was there and that I initially reported as missing,
+because I queried the wrong endpoint (the classic-protection API, whose 404 I
+misread as "nothing is protected").
+
+**What was actually missing is "require a pull request".** Added by editing
+ruleset `23709088` to include the `pull_request` rule (a `PUT` to
+`/rulesets/23709088`, not the classic protection endpoint). The ruleset now
+carries `deletion`, `non_fast_forward`, and `pull_request`.
+
+| Rule | Present before | Now |
 |---|---|---|
-| Require PR before merging | yes | Enforces the feature-branch rule mechanically |
-| Required approvals | **0** | Single maintainer — any higher count deadlocks every PR |
-| Dismiss stale reviews | yes | Cheap correctness if a second reviewer appears |
-| Allow force-push | **no** | Force-pushing `master` would orphan what a deploy shipped |
-| Allow branch deletion | **no** | Deleting `master` on a public repo is unrecoverable |
-| `enforce_admins` | false | Keeps an escape hatch for a genuine emergency |
+| Block branch deletion | yes | yes |
+| Block force-push (`non_fast_forward`) | yes | yes |
+| Require a pull request | **no** | **yes** |
+| Required approvals | n/a | **0** — single maintainer, any higher count deadlocks every PR |
+| Bypass actors | none | none |
 
 **Deliberately not added: required status checks.** `deploy.yml` triggers on
 `push` to `master`, so it only runs *after* a merge — it can never gate one.
@@ -68,9 +100,43 @@ GitHub's default job timeout is **360 minutes**. A wedged `ssh-action` or a hung
 *while holding the `deploy-9router` concurrency lock* — so no subsequent deploy
 could even queue behind it.
 
-Added: **30 min** on `deploy` and `build-test` (runs are ~12 min), **30 min** on
-`preview` (own VPS build), **15 min** on the two small jobs
-(`cleanup-ghcr-tags`, `ghcr-pull-test`).
+Added, all as **job-level** keys: **30 min** on `deploy`, `build-test`'s `build`
+job and `preview`; **15 min** on `build-test`'s `boot-check` and
+`cleanup-ghcr-tags`; **10 min** on `build-test`'s `resolve`.
+
+#### Correction — the first attempt broke three workflows
+
+The first version of this change put `timeout-minutes` at the **workflow top
+level** in `deploy.yml`, `build-test.yml`, and `preview.yml`. It is not a
+workflow-level key. GitHub rejects the entire file:
+
+> `This run likely failed because of a workflow file issue.`
+
+Run `39439088344` failed for exactly this reason. It was triggered by the branch
+push (the `deploy.yml` push filter matches any branch), not by a master deploy —
+but the same file would have been broken on master had it merged.
+
+**Two process failures allowed this through, both worth fixing permanently:**
+
+1. **"YAML validated" was not validation.** `ruby -ryaml` checks well-formedness,
+   not schema. All five files parsed fine while three were invalid GitHub
+   workflows. Syntax checks were reported as validity checks.
+2. **A success signal was fabricated.** In the same audit, the branch-protection
+   `PUT` returned an empty body and the script printed `" -> protected"` from its
+   own `echo`, not from the API. Re-querying showed the protection had **never
+   applied**. Assuming success from the absence of an error message.
+
+**Fix:** `actionlint` is now the validator (`brew install actionlint` — was not
+installed). It reports this precisely:
+
+```
+unexpected key "timeout-minutes" for "workflow" section.
+expected one of "concurrency", "defaults", "env", "jobs", "name", "on",
+"permissions", "run-name"
+```
+
+For any workflow change, `actionlint .github/workflows/*.yml` is the gate. It
+also catches the `uses:`/input mistakes that a YAML parser never would.
 
 ### `preview.yml` declared no `permissions:`
 
