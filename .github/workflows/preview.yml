@@ -40,7 +40,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Resolve service type
         id: resolve-type
@@ -70,7 +70,7 @@ jobs:
 
       - name: Teardown existing preview (before deploy)
         if: steps.resolve-type.outputs.action == 'deploy'
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.TENCENT_HOST }}
           username: ${{ secrets.TENCENT_USER }}
@@ -102,7 +102,7 @@ jobs:
 
       - name: Teardown preview (explicit)
         if: steps.resolve-type.outputs.action == 'teardown'
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.TENCENT_HOST }}
           username: ${{ secrets.TENCENT_USER }}
@@ -150,7 +150,7 @@ jobs:
 
       - name: Seed preview data
         if: steps.resolve-type.outputs.action == 'deploy'
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.TENCENT_HOST }}
           username: ${{ secrets.TENCENT_USER }}
@@ -171,7 +171,7 @@ jobs:
 
       - name: Build preview images
         if: steps.resolve-type.outputs.action == 'deploy'
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.TENCENT_HOST }}
           username: ${{ secrets.TENCENT_USER }}
@@ -219,7 +219,7 @@ jobs:
 
       - name: Start preview stack
         if: steps.resolve-type.outputs.action == 'deploy'
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.TENCENT_HOST }}
           username: ${{ secrets.TENCENT_USER }}
@@ -327,7 +327,7 @@ jobs:
 
       - name: Verify via Cloudflare edge
         if: steps.resolve-type.outputs.action == 'deploy'
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.TENCENT_HOST }}
           username: ${{ secrets.TENCENT_USER }}
