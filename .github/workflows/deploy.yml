@@ -56,7 +56,7 @@ jobs:
       PIN_9ROUTER_API: v0.5.104
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Source SHAs resolve on the runner (git ls-remote), not over SSH on the
       # VPS — the image build itself also moved off the VPS with this change.
