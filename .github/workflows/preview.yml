@@ -53,9 +53,11 @@ jobs:
           BRANCH="${{ github.event.inputs.branch || github.event.client_payload.branch }}"
           ACTION="${{ github.event.inputs.action || github.event.client_payload.action }}"
 
-          echo "type=$TYPE" >> "$GITHUB_OUTPUT"
-          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
-          echo "action=$ACTION" >> "$GITHUB_OUTPUT"
+          {
+            echo "type=$TYPE"
+            echo "branch=$BRANCH"
+            echo "action=$ACTION"
+          } >> "$GITHUB_OUTPUT"
 
           # type=select on non-master = fail
           if [[ "$TYPE" == "select" && "$BRANCH" != "master" ]]; then
