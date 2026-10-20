@@ -105,7 +105,7 @@ jobs:
           echo "apirepo_sha=$APIREPO_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       # The runner build/push MUST authenticate explicitly: `packages: write`
       # alone leaves the registry token exchange anonymous, which 403s.
