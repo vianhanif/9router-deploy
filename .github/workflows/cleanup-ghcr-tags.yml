@@ -40,6 +40,13 @@ on:
 permissions:
   packages: write
 
+# A manual dispatch during the 03:00 cron run would otherwise double-purge the
+# same package concurrently; the API deletes are per-version, so two runs racing
+# produce noisy 404s rather than corruption, but serializing is free.
+concurrency:
+  group: cleanup-ghcr-tags
+  cancel-in-progress: false
+
 env:
   OWNER: vianhanif
   PACKAGE_NAMESPACE: 9router-deploy
@@ -50,6 +57,7 @@ env:
 jobs:
   cleanup:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Delete stale package versions
         env:
