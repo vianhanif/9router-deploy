@@ -110,7 +110,7 @@ jobs:
       # The runner build/push MUST authenticate explicitly: `packages: write`
       # alone leaves the registry token exchange anonymous, which 403s.
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
