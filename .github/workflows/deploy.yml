@@ -53,8 +53,8 @@ jobs:
       # Bumping: cut a new tag in the source repo, then update the value here.
       # Never move an existing tag forward — that rewrites what a prior deploy
       # shipped. Both repos must be tagged; resolve_sha fails loudly otherwise.
-      PIN_9ROUTER: v0.5.104
-      PIN_9ROUTER_API: v0.5.104
+      PIN_9ROUTER: v0.5.109
+      PIN_9ROUTER_API: v0.5.109
 
     steps:
       - uses: actions/checkout@v7
@@ -305,7 +305,7 @@ jobs:
             echo "Pulling new images from GHCR..."
             # 9router is profile-gated, so a bare `pull` would skip it; list the
             # services explicitly and activate the profile.
-            docker compose --profile dashboard pull 9router 9router-api headroom
+            docker compose --profile dashboard pull 9router 9router-api
 
             echo "Starting production stack..."
 
