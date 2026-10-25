@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # ---- Stage 1: 9router dependency tree ----
-FROM node:22-alpine AS ninesrc
+FROM node:22.23.4-alpine AS ninesrc
 ARG NINEROUTER_REPO=https://github.com/vianhanif/9router.git
 ARG NINEROUTER_VERSION=master
 RUN apk add --no-cache git python3 make g++ linux-headers
@@ -20,7 +20,7 @@ ENV NODE_OPTIONS=--dns-result-order=ipv4first
 RUN npm install -g npm@11 && npm install --omit=dev --no-audit --no-fund
 
 # ---- Stage 2: 9router-api build ----
-FROM node:22-alpine AS apibuild
+FROM node:22.23.4-alpine AS apibuild
 ARG APIREPO_REPO=https://github.com/vianhanif/9router-api.git
 ARG APIREPO_VERSION=master
 RUN apk add --no-cache git python3 make g++ linux-headers
