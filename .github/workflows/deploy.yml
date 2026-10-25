@@ -305,7 +305,7 @@ jobs:
             echo "Pulling new images from GHCR..."
             # 9router is profile-gated, so a bare `pull` would skip it; list the
             # services explicitly and activate the profile.
-            docker compose --profile dashboard pull 9router 9router-api
+            docker compose --profile dashboard pull 9router 9router-api headroom
 
             echo "Starting production stack..."
 
