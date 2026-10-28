@@ -28,6 +28,20 @@ ENV NODE_OPTIONS=--dns-result-order=ipv4first
 # Fix arborist crash ("edgesOut") in npm 10.9.8 by upgrading to stable 11.x
 RUN npm install -g npm@11 && npm install
 
+# Install lazy-runtime deps (wreq-js, playwright-core) in isolated dir
+# for later copying to runner. These are loaded by lazyRuntime.js via createRequire
+# and omitted by Next standalone tracing, causing 502 in OpenCode Free.
+# See https://github.com/decolua/9router/issues/5245
+RUN mkdir -p /opt/lazy-runtime && cd /opt/lazy-runtime && npm init -y >/dev/null && \
+    npm install --no-save \
+      --registry="${NPM_REGISTRY}" \
+      --fetch-retries=5 \
+      --fetch-retry-factor=2 \
+      --fetch-retry-mintimeout=10000 \
+      --fetch-retry-maxtimeout=120000 \
+      --fetch-timeout=300000 \
+      wreq-js playwright-core
+
 COPY --from=source /app/source ./
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
@@ -58,6 +72,10 @@ COPY --from=builder /app/node_modules/next ./node_modules/next
 # sql.js loads dist/sql-wasm.wasm by path at runtime; tracing only follows JS imports,
 # so the last-resort DB driver would abort with ENOENT on the missing binary.
 COPY --from=builder /app/node_modules/sql.js ./node_modules/sql.js
+
+# Lazy-runtime deps (wreq-js, playwright-core) are loaded at runtime and omitted by tracing.
+# See https://github.com/decolua/9router/issues/5245
+COPY --from=builder /opt/lazy-runtime/node_modules/. ./node_modules/
 
 RUN mkdir -p /app/data && chown -R node:node /app && \
   mkdir -p /app/data-home && chown node:node /app/data-home && \
