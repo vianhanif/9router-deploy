@@ -52,9 +52,17 @@ jobs:
       #
       # Bumping: cut a new tag in the source repo, then update the value here.
       # Never move an existing tag forward — that rewrites what a prior deploy
-      # shipped. Both repos must be tagged; resolve_sha fails loudly otherwise.
-      PIN_9ROUTER: v0.5.112
-      PIN_9ROUTER_API: v0.5.112
+      # shipped. resolve_sha fails loudly on an unresolvable ref.
+      #
+      # These are commit SHAs, not version tags, on purpose: the fixes below have
+      # no tag yet (the next tag is cut from an upstream 9router release), and a
+      # dispatch-only deploy left prod running an unpinned SHA — any later push
+      # deploy would have rebuilt `v0.5.112` and silently reverted both fixes.
+      # resolve_sha accepts a 40-char SHA verbatim, and the image tags are
+      # already `sha-<sha>`, so a SHA pin is as deterministic as a tag. Swap back
+      # to `vX.Y.Z` in this block whenever both repos are tagged again.
+      PIN_9ROUTER: 5fa9ed83d8a5a9868b12173e88f705b706d9483a     # master @ 9router#50 (combo maxOutput = min)
+      PIN_9ROUTER_API: c2be5a18dcf42c173eebbec1ec787abc03037b69 # master @ 9router-api#12 (/v1/models passthrough)
 
     steps:
       - uses: actions/checkout@v7
