@@ -61,7 +61,7 @@ jobs:
       # resolve_sha accepts a 40-char SHA verbatim, and the image tags are
       # already `sha-<sha>`, so a SHA pin is as deterministic as a tag. Swap back
       # to `vX.Y.Z` in this block whenever both repos are tagged again.
-      PIN_9ROUTER: dfff94b1b4341f0b2ae7e4e036e46df295ed4a89     # master @ 9router#54 (v0.5.123 merge)
+      PIN_9ROUTER: f6a358b4406b58261ab0ca7b50505a1c57ddc4b7     # master @ 9router#55 (v0.5.123 + BytePlus endpoint mode)
       PIN_9ROUTER_API: efcc33a2d960cebf5530ad764b72dec1c7cdd1d8 # master @ 9router-api#15 (v0.5.123 sync)
 
     steps:
